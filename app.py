@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
-from binance.client import Client
+import yfinance as yf
 
 # ========================================================================= //
 # CONFIGURAÇÃO DA PÁGINA
@@ -38,20 +38,40 @@ if modo == "Live/Demo (Tempo Real)":
     secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# FUNÇÕES DO BOT
+# FUNÇÕES DO BOT (AGORA COM YAHOO FINANCE)
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados(symbol, interval, start_str, end_str):
     try:
-        client = Client()
-        klines = client.get_historical_klines(symbol, interval, start_str, end_str)
-        df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume',
-                                            'close_time', 'qav', 'trades', 'tbbav', 'tbqav', 'ignore'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        # Converte o símbolo da Binance (BTCUSDT) para o símbolo do Yahoo Finance (BTC-USD)
+        ticker = symbol.replace("USDT", "-USD")
+        
+        # Mapeia os intervalos da Binance para os do Yahoo Finance
+        yf_interval = interval
+        if interval == "1m": yf_interval = "1m"
+        elif interval == "5m": yf_interval = "5m"
+        elif interval == "15m": yf_interval = "15m"
+        elif interval == "1h": yf_interval = "60m" # Yahoo usa 60m para 1 hora
+        elif interval == "4h": yf_interval = "1h"  # Yahoo não tem 4h, usamos 1h
+        elif interval == "1d": yf_interval = "1d"
+        
+        # Baixa os dados
+        df = yf.download(ticker, start=start_str, end=end_str, interval=yf_interval, progress=False)
+        
+        # Verifica se o download foi bem-sucedido
+        if df.empty:
+            st.warning("Não foi possível baixar os dados. Tente mudar o período ou o intervalo.")
+            return pd.DataFrame()
+            
+        # Ajusta o formato para ficar igual ao que o resto do código espera
+        df.reset_index(inplace=True)
+        df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'}, inplace=True)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
         df['open'] = df['open'].astype(float)
         df['high'] = df['high'].astype(float)
         df['low'] = df['low'].astype(float)
         df['close'] = df['close'].astype(float)
+        
         return df
     except Exception as e:
         st.error(f"Erro ao baixar dados: {e}")
@@ -59,7 +79,7 @@ def baixar_dados(symbol, interval, start_str, end_str):
 
 def simular_estrategia(df, step, fee, max_wins, max_losses):
     trades = []
-    capital = 1000.0  # Capital inicial fictício para cálculos
+    capital = 1000.0
     ref_price = df['close'].iloc[0]
     direction = 0
     entry_price = None
@@ -91,7 +111,6 @@ def simular_estrategia(df, step, fee, max_wins, max_losses):
                 horario_entrada = ts
 
         elif direction == 1:
-            # Checa Stop primeiro (conservador)
             if low <= sl:
                 pnl_pct = ((sl - entry_price) / entry_price - (fee * 2)) * 100
                 capital *= (1 + pnl_pct / 100)
@@ -145,7 +164,6 @@ def simular_estrategia(df, step, fee, max_wins, max_losses):
                 sl = entry_price * (1 + step)
                 horario_entrada = ts
 
-        # Bloqueio por metas
         if wins >= max_wins or losses >= max_losses:
             blocked = True
             wins = 0
@@ -160,7 +178,7 @@ if modo == "Backtest (Passado)":
     st.subheader(f"📊 Backtest {symbol} | Timeframe: {timeframe}")
 
     if st.button("🚀 Rodar Backtest", type="primary"):
-        with st.spinner("Baixando dados da Binance e simulando..."):
+        with st.spinner("Baixando dados do Yahoo Finance e simulando..."):
             df = baixar_dados(symbol, timeframe, str(data_inicio), str(data_fim))
             if not df.empty:
                 trades, capital_final = simular_estrategia(df, step, fee, max_wins, max_losses)
@@ -173,14 +191,12 @@ if modo == "Backtest (Passado)":
                     taxa_acerto = (vitorias / total_trades) * 100 if total_trades > 0 else 0
                     lucro_total = ((capital_final - 1000) / 1000) * 100
 
-                    # Métricas
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Total de Trades", total_trades)
                     col2.metric("Taxa de Acerto", f"{taxa_acerto:.1f}%")
                     col3.metric("Lucro Total", f"{lucro_total:.2f}%")
                     col4.metric("Capital Final", f"${capital_final:.2f}")
 
-                    # Gráfico da Curva de Capital
                     st.subheader("📈 Curva de Capital")
                     fig_equity = go.Figure()
                     fig_equity.add_trace(go.Scatter(x=df_trades['Data'], y=df_trades['Capital'],
@@ -189,7 +205,6 @@ if modo == "Backtest (Passado)":
                     fig_equity.update_layout(template="plotly_dark", height=400)
                     st.plotly_chart(fig_equity, use_container_width=True)
 
-                    # Gráfico de Preços com Marcadores
                     st.subheader("📉 Preço com Entradas e Saídas")
                     fig_price = go.Figure(data=[go.Candlestick(x=df['timestamp'], open=df['open'],
                                                                 high=df['high'], low=df['low'],
@@ -203,7 +218,6 @@ if modo == "Backtest (Passado)":
                     fig_price.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig_price, use_container_width=True)
 
-                    # Tabela de Trades
                     st.subheader("📋 Histórico de Operações")
                     st.dataframe(df_trades, use_container_width=True)
                 else:
@@ -230,6 +244,7 @@ if modo == "Live/Demo (Tempo Real)":
             st.session_state.losses = 0
 
         try:
+            from binance.client import Client
             client = Client(api_key, secret_key, testnet=True)
             
             if st.button("🔄 Verificar Preço Agora"):
