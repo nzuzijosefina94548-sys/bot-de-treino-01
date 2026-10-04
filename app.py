@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import time
 import yfinance as yf
 from binance.client import Client
 
@@ -39,7 +38,7 @@ if modo == "Live/Demo (Tempo Real)":
     secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# FUNÇÕES DO BOT (AGORA COM YAHOO FINANCE PARA BACKTEST)
+# FUNÇÕES DO BOT (AGORA COM YAHOO FINANCE E CORREÇÃO DE FORMATO)
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados(symbol, interval, start_str, end_str):
@@ -52,26 +51,26 @@ def baixar_dados(symbol, interval, start_str, end_str):
         if interval == "1m": yf_interval = "1m"
         elif interval == "5m": yf_interval = "5m"
         elif interval == "15m": yf_interval = "15m"
-        elif interval == "1h": yf_interval = "60m" # Yahoo usa 60m para 1 hora
-        elif interval == "4h": yf_interval = "1h"  # Yahoo não tem 4h, usamos 1h
+        elif interval == "1h": yf_interval = "60m"
+        elif interval == "4h": yf_interval = "1h"
         elif interval == "1d": yf_interval = "1d"
         
         # Baixa os dados
         df = yf.download(ticker, start=start_str, end=end_str, interval=yf_interval, progress=False)
         
-        # Verifica se o download foi bem-sucedido
         if df.empty:
             st.warning("Não foi possível baixar os dados. Tente mudar o período ou o intervalo.")
             return pd.DataFrame()
             
-        # Ajusta o formato para ficar igual ao que o resto do código espera
+        # --- CORREÇÃO PRINCIPAL: "Achatar" os dados para valores únicos ---
         df.reset_index(inplace=True)
         df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'}, inplace=True)
+        
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['open'] = df['open'].astype(float)
-        df['high'] = df['high'].astype(float)
-        df['low'] = df['low'].astype(float)
-        df['close'] = df['close'].astype(float)
+        df['open'] = df['open'].squeeze().astype(float)
+        df['high'] = df['high'].squeeze().astype(float)
+        df['low'] = df['low'].squeeze().astype(float)
+        df['close'] = df['close'].squeeze().astype(float)
         
         return df
     except Exception as e:
