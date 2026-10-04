@@ -22,8 +22,20 @@ modo = st.sidebar.selectbox("Modo de Operação", ["Backtest (Passado)", "Live/D
 st.sidebar.subheader("Parâmetros da Estratégia")
 symbol = st.sidebar.text_input("Par (ex: BTCUSDT)", "BTCUSDT")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "4h", "1d"], index=3)
-step = st.sidebar.number_input("Passo da Escada (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1) / 100
+step = st.sidebar.number_input("Lucro Desejado (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1) / 100
 fee = st.sidebar.number_input("Taxa da Corretora (%)", min_value=0.01, max_value=1.0, value=0.10, step=0.01) / 100
+
+# --- SELETOR DE ESTRATÉGIA (3 OPÇÕES) ---
+st.sidebar.subheader("Estratégia de Alvo")
+tipo_estrategia = st.sidebar.radio(
+    "Escolha a estratégia:",
+    [
+        "Normal (Alvo Fixo)",
+        "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)",
+        "Recuperação Simples (Apenas Perda Anterior + Taxas)"
+    ]
+)
+
 max_wins = st.sidebar.number_input("Máx. Vitórias Seguidas", min_value=1, max_value=50, value=3)
 max_losses = st.sidebar.number_input("Máx. Derrotas Seguidas", min_value=1, max_value=50, value=3)
 
@@ -38,15 +50,12 @@ if modo == "Live/Demo (Tempo Real)":
     secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# FUNÇÕES DO BOT (CORREÇÃO DEFINITIVA DO YFINANCE)
+# FUNÇÕES DO BOT
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados(symbol, interval, start_str, end_str):
     try:
-        # Converte o símbolo da Binance (BTCUSDT) para o símbolo do Yahoo Finance (BTC-USD)
         ticker = symbol.replace("USDT", "-USD")
-        
-        # Mapeia os intervalos da Binance para os do Yahoo Finance
         yf_interval = interval
         if interval == "1m": yf_interval = "1m"
         elif interval == "5m": yf_interval = "5m"
@@ -55,29 +64,24 @@ def baixar_dados(symbol, interval, start_str, end_str):
         elif interval == "4h": yf_interval = "1h"
         elif interval == "1d": yf_interval = "1d"
         
-        # Baixa os dados
         df = yf.download(ticker, start=start_str, end=end_str, interval=yf_interval, progress=False)
         
         if df.empty:
             st.warning("Não foi possível baixar os dados. Tente mudar o período ou o intervalo.")
             return pd.DataFrame()
-        
-        # --- CORREÇÃO PRINCIPAL: Forçar a estrutura para colunas simples ---
-        # Se o yfinance devolver um MultiIndex (o que causa o erro), nós "achatamos"
+            
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
         df.reset_index(inplace=True)
         df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'}, inplace=True)
         
-        # Garante que cada valor é um número único (float), não uma lista
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df['open'] = pd.to_numeric(df['open'], errors='coerce')
         df['high'] = pd.to_numeric(df['high'], errors='coerce')
         df['low'] = pd.to_numeric(df['low'], errors='coerce')
         df['close'] = pd.to_numeric(df['close'], errors='coerce')
         
-        # Remove linhas com valores inválidos (NaN)
         df.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
         
         return df
@@ -85,7 +89,7 @@ def baixar_dados(symbol, interval, start_str, end_str):
         st.error(f"Erro ao baixar dados: {e}")
         return pd.DataFrame()
 
-def simular_estrategia(df, step, fee, max_wins, max_losses):
+def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia):
     trades = []
     capital = 1000.0
     ref_price = df['close'].iloc[0]
@@ -97,6 +101,9 @@ def simular_estrategia(df, step, fee, max_wins, max_losses):
     losses = 0
     blocked = False
     horario_entrada = None
+    
+    # Variável para guardar a perda total da operação anterior (em decimal, ex: 0.0120 = 1.20%)
+    perda_total_anterior = 0.0
 
     for i, row in df.iterrows():
         high, low, close, ts = row['high'], row['low'], row['close'], row['timestamp']
@@ -105,23 +112,48 @@ def simular_estrategia(df, step, fee, max_wins, max_losses):
             continue
 
         if direction == 0:
+            # --- DEFINE O FATOR DO ALVO COM BASE NA ESTRATÉGIA ESCOLHIDA ---
+            if tipo_estrategia == "Normal (Alvo Fixo)":
+                # Alvo normal: 1% + 0.10% = 1.10%
+                fator_alvo = step + fee
+                
+            elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
+                if perda_total_anterior > 0:
+                    # Recuperação cirúrgica: perda anterior + taxa de abertura + taxa de fechamento + lucro desejado
+                    fator_alvo = perda_total_anterior + fee + fee + step
+                else:
+                    fator_alvo = step + fee
+                    
+            else:  # Recuperação Simples (Apenas Perda Anterior + Taxas)
+                if perda_total_anterior > 0:
+                    # Recuperação simples: perda anterior + taxa de abertura + taxa de fechamento (sem lucro extra)
+                    fator_alvo = perda_total_anterior + fee + fee
+                else:
+                    fator_alvo = step + fee
+
             if high >= ref_price * (1 + step):
                 direction = 1
                 entry_price = ref_price * (1 + step)
-                tp = entry_price * (1 + step + fee)
-                sl = ref_price
+                tp = entry_price * (1 + fator_alvo)
+                sl = entry_price * (1 - step - fee)
                 horario_entrada = ts
             elif low <= ref_price * (1 - step):
                 direction = -1
                 entry_price = ref_price * (1 - step)
-                tp = entry_price * (1 - step - fee)
-                sl = ref_price
+                tp = entry_price * (1 - fator_alvo)
+                sl = entry_price * (1 + step + fee)
                 horario_entrada = ts
 
         elif direction == 1:
             if low <= sl:
-                pnl_pct = ((sl - entry_price) / entry_price - (fee * 2)) * 100
+                # --- BATEU O STOP ---
+                pnl_pct = ((sl - entry_price) / entry_price) * 100
                 capital *= (1 + pnl_pct / 100)
+                
+                # Guarda a perda total (mercado + taxa de abertura + taxa de fechamento)
+                # A perda de mercado é o step, a taxa da operação anterior já foi paga
+                perda_total_anterior = abs(pnl_pct / 100) + fee  # Ex: 1.10% + 0.10% = 1.20%
+                
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
                                 "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
                 losses += 1
@@ -129,26 +161,46 @@ def simular_estrategia(df, step, fee, max_wins, max_losses):
                 direction = -1
                 ref_price = sl
                 entry_price = sl
-                tp = entry_price * (1 - step - fee)
-                sl = entry_price * (1 + step)
+                
+                # Recalcula o alvo para a próxima entrada
+                if tipo_estrategia == "Normal (Alvo Fixo)":
+                    fator_alvo = step + fee
+                elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
+                    fator_alvo = perda_total_anterior + fee + fee + step
+                else:  # Recuperação Simples
+                    fator_alvo = perda_total_anterior + fee + fee
+                    
+                tp = entry_price * (1 - fator_alvo)
+                sl = entry_price * (1 + step + fee)
                 horario_entrada = ts
+                
             elif high >= tp:
-                pnl_pct = ((tp - entry_price) / entry_price - (fee * 2)) * 100
+                # --- BATEU O ALVO ---
+                pnl_pct = ((tp - entry_price) / entry_price) * 100
                 capital *= (1 + pnl_pct / 100)
+                
+                # Zera a perda após recuperar
+                perda_total_anterior = 0.0
+                
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
                                 "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
                 wins += 1
                 losses = 0
                 ref_price = tp
                 entry_price = tp
-                tp = entry_price * (1 + step + fee)
-                sl = entry_price * (1 - step)
+                fator_alvo = step + fee
+                tp = entry_price * (1 + fator_alvo)
+                sl = entry_price * (1 - step - fee)
                 horario_entrada = ts
 
         elif direction == -1:
             if high >= sl:
-                pnl_pct = ((entry_price - sl) / entry_price - (fee * 2)) * 100
+                # --- BATEU O STOP ---
+                pnl_pct = ((entry_price - sl) / entry_price) * 100
                 capital *= (1 + pnl_pct / 100)
+                
+                perda_total_anterior = abs(pnl_pct / 100) + fee
+                
                 trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
                                 "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
                 losses += 1
@@ -156,20 +208,34 @@ def simular_estrategia(df, step, fee, max_wins, max_losses):
                 direction = 1
                 ref_price = sl
                 entry_price = sl
-                tp = entry_price * (1 + step + fee)
-                sl = entry_price * (1 - step)
+                
+                if tipo_estrategia == "Normal (Alvo Fixo)":
+                    fator_alvo = step + fee
+                elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
+                    fator_alvo = perda_total_anterior + fee + fee + step
+                else:  # Recuperação Simples
+                    fator_alvo = perda_total_anterior + fee + fee
+                    
+                tp = entry_price * (1 + fator_alvo)
+                sl = entry_price * (1 - step - fee)
                 horario_entrada = ts
+                
             elif low <= tp:
-                pnl_pct = ((entry_price - tp) / entry_price - (fee * 2)) * 100
+                # --- BATEU O ALVO ---
+                pnl_pct = ((entry_price - tp) / entry_price) * 100
                 capital *= (1 + pnl_pct / 100)
+                
+                perda_total_anterior = 0.0
+                
                 trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
                                 "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
                 wins += 1
                 losses = 0
                 ref_price = tp
                 entry_price = tp
-                tp = entry_price * (1 - step - fee)
-                sl = entry_price * (1 + step)
+                fator_alvo = step + fee
+                tp = entry_price * (1 - fator_alvo)
+                sl = entry_price * (1 + step + fee)
                 horario_entrada = ts
 
         if wins >= max_wins or losses >= max_losses:
@@ -183,13 +249,13 @@ def simular_estrategia(df, step, fee, max_wins, max_losses):
 # MODO BACKTEST
 # ========================================================================= //
 if modo == "Backtest (Passado)":
-    st.subheader(f"📊 Backtest {symbol} | Timeframe: {timeframe}")
+    st.subheader(f"📊 Backtest {symbol} | Timeframe: {timeframe} | Estratégia: {tipo_estrategia}")
 
     if st.button("🚀 Rodar Backtest", type="primary"):
         with st.spinner("Baixando dados do Yahoo Finance e simulando..."):
             df = baixar_dados(symbol, timeframe, str(data_inicio), str(data_fim))
             if not df.empty:
-                trades, capital_final = simular_estrategia(df, step, fee, max_wins, max_losses)
+                trades, capital_final = simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia)
                 
                 if trades:
                     df_trades = pd.DataFrame(trades)
@@ -253,7 +319,6 @@ if modo == "Live/Demo (Tempo Real)":
 
         try:
             client = Client(api_key, secret_key, testnet=True)
-            # CORREÇÃO IMPORTANTE: Força a conexão para o ambiente de simulação (Demo)
             client.API_URL = 'https://testnet.binance.vision/api'
             
             if st.button("🔄 Verificar Preço Agora"):
