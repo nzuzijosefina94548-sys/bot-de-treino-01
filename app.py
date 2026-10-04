@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
 import yfinance as yf
+from binance.client import Client
 
 # ========================================================================= //
 # CONFIGURAÇÃO DA PÁGINA
@@ -38,7 +39,7 @@ if modo == "Live/Demo (Tempo Real)":
     secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# FUNÇÕES DO BOT (AGORA COM YAHOO FINANCE)
+# FUNÇÕES DO BOT (AGORA COM YAHOO FINANCE PARA BACKTEST)
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados(symbol, interval, start_str, end_str):
@@ -244,8 +245,9 @@ if modo == "Live/Demo (Tempo Real)":
             st.session_state.losses = 0
 
         try:
-            from binance.client import Client
             client = Client(api_key, secret_key, testnet=True)
+            # CORREÇÃO IMPORTANTE: Força a conexão para o ambiente de simulação (Demo)
+            client.API_URL = 'https://testnet.binance.vision/api'
             
             if st.button("🔄 Verificar Preço Agora"):
                 ticker = client.get_symbol_ticker(symbol=symbol)
