@@ -38,7 +38,7 @@ if modo == "Live/Demo (Tempo Real)":
     secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# FUNÇÕES DO BOT (AGORA COM YAHOO FINANCE E CORREÇÃO DE FORMATO)
+# FUNÇÕES DO BOT (CORREÇÃO DEFINITIVA DO YFINANCE)
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados(symbol, interval, start_str, end_str):
@@ -61,16 +61,24 @@ def baixar_dados(symbol, interval, start_str, end_str):
         if df.empty:
             st.warning("Não foi possível baixar os dados. Tente mudar o período ou o intervalo.")
             return pd.DataFrame()
+        
+        # --- CORREÇÃO PRINCIPAL: Forçar a estrutura para colunas simples ---
+        # Se o yfinance devolver um MultiIndex (o que causa o erro), nós "achatamos"
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
             
-        # --- CORREÇÃO PRINCIPAL: "Achatar" os dados para valores únicos ---
         df.reset_index(inplace=True)
         df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'}, inplace=True)
         
+        # Garante que cada valor é um número único (float), não uma lista
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['open'] = df['open'].squeeze().astype(float)
-        df['high'] = df['high'].squeeze().astype(float)
-        df['low'] = df['low'].squeeze().astype(float)
-        df['close'] = df['close'].squeeze().astype(float)
+        df['open'] = pd.to_numeric(df['open'], errors='coerce')
+        df['high'] = pd.to_numeric(df['high'], errors='coerce')
+        df['low'] = pd.to_numeric(df['low'], errors='coerce')
+        df['close'] = pd.to_numeric(df['close'], errors='coerce')
+        
+        # Remove linhas com valores inválidos (NaN)
+        df.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
         
         return df
     except Exception as e:
