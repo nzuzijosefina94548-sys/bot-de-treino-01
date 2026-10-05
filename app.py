@@ -64,21 +64,26 @@ if modo == "Live/Demo (Tempo Real)":
     api_key = st.sidebar.text_input("API Key", type="password")
     secret_key = st.sidebar.text_input("Secret Key", type="password")
     
-    st.sidebar.subheader("Funcionalidade do Demo")
-    func_demo = st.sidebar.radio(
-        "Escolha a funcionalidade:",
-        [
-            "1 - Teste em Tempo Real (Ação Automática)",
-            "2 - Backtest com Dados da Binance (Passado)"
-        ]
-    )
-    
-    if func_demo == "1 - Teste em Tempo Real (Ação Automática)":
-        intervalo_verificacao = st.sidebar.number_input("Intervalo de Verificação (segundos)", min_value=5, max_value=300, value=30)
-        num_verificacoes = st.sidebar.number_input("Número de Verificações", min_value=1, max_value=1000, value=10)
+    # As funcionalidades só aparecem DEPOIS que a API for inserida
+    if api_key and secret_key:
+        st.sidebar.subheader("Funcionalidade do Demo")
+        func_demo = st.sidebar.radio(
+            "Escolha a funcionalidade:",
+            [
+                "1 - Teste em Tempo Real (Ação Automática)",
+                "2 - Backtest com Dados da Binance (Passado)"
+            ]
+        )
+        
+        if func_demo == "1 - Teste em Tempo Real (Ação Automática)":
+            intervalo_verificacao = st.sidebar.number_input("Intervalo de Verificação (segundos)", min_value=5, max_value=300, value=30)
+            num_verificacoes = st.sidebar.number_input("Número de Verificações", min_value=1, max_value=1000, value=10)
+    else:
+        func_demo = None
+        st.sidebar.info("Insira a API Key e a Secret Key para ver as funcionalidades do Demo.")
 
 # ========================================================================= //
-# FUNÇÕES DO BOT
+# FUNÇÕES DO BOT (YAHOO E BINANCE)
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados_yahoo(symbol, timeframe, start_str, end_str):
@@ -170,7 +175,6 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
     
     perda_total_anterior = 0.0
     
-    # --- CONTADORES DE BLOQUEIO ---
     bloqueios_por_derrota = 0
     bloqueios_por_vitoria = 0
 
@@ -283,7 +287,6 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
                 sl = entry_price * (1 + step + fee)
                 horario_entrada = ts
 
-        # --- VERIFICAÇÃO DE BLOQUEIO ---
         if losses >= max_losses:
             blocked = True
             bloqueios_por_derrota += 1
@@ -302,11 +305,10 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
 
     return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
 
-def mostrar_resultados(df, trades, capital_final, banca_inicial, bloqueios_derrota, bloqueios_vitoria):
+def mostrar_resultados(df, trades, capital_final, banca_inicial, bloqueios_derrota, bloqueios_vitoria, max_losses, max_wins):
     if trades:
         df_trades = pd.DataFrame(trades)
         
-        # --- PAINEL DE AVISO ---
         if bloqueios_derrota > 0 or bloqueios_vitoria > 0:
             st.markdown("---")
             col_aviso1, col_aviso2 = st.columns(2)
@@ -374,7 +376,7 @@ if modo == "Backtest (Passado)":
                 trades, capital_final, bloq_derrota, bloq_vitoria = simular_estrategia(
                     df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem
                 )
-                mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria)
+                mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria, max_losses, max_wins)
 
 # ========================================================================= //
 # MODO LIVE/DEMO (BINANCE)
@@ -408,13 +410,11 @@ if modo == "Live/Demo (Tempo Real)":
             if "bloqueado" not in st.session_state:
                 st.session_state.bloqueado = False
 
-            # --- PAINEL DE AVISO NO TOPO ---
             if st.session_state.bloqueado:
                 st.error("🚨 **BOT BLOQUEADO!** O limite de derrotas ou vitórias seguidas foi atingido. O bot está pausado. Clique em 'RESETAR BOT' para continuar.")
             else:
                 st.success("🟢 **BOT ATIVO!** A operar normalmente.")
             
-            # --- PAINEL DE CONTROLE VISUAL ---
             col_painel1, col_painel2, col_painel3, col_painel4 = st.columns(4)
             col_painel1.metric("Capital Atual", f"${st.session_state.capital_atual:.2f}")
             col_painel2.metric("P&L Total", f"${st.session_state.pnl_total:.2f}")
@@ -481,7 +481,6 @@ if modo == "Live/Demo (Tempo Real)":
                                     st.session_state.capital_atual -= perda
                                     st.session_state.pnl_total -= perda
                                 
-                                # Verifica bloqueio
                                 if st.session_state.losses >= max_losses or st.session_state.wins >= max_wins:
                                     st.session_state.bloqueado = True
                                     st.session_state.log.append(f"🚨 BLOQUEIO ATIVADO! (Derrotas: {st.session_state.losses} | Vitórias: {st.session_state.wins})")
@@ -503,7 +502,7 @@ if modo == "Live/Demo (Tempo Real)":
                 st.text(linha)
         
         # --- FUNCIONALIDADE 2: BACKTEST COM DADOS DA BINANCE ---
-        else:
+        elif func_demo == "2 - Backtest com Dados da Binance (Passado)":
             st.subheader("📊 Backtest com Dados da Binance (Passado)")
             st.info(f"Usando a estratégia: **{tipo_estrategia}** | Banca: ${banca_inicial} | Alavancagem: {alavancagem}x")
             
@@ -520,7 +519,7 @@ if modo == "Live/Demo (Tempo Real)":
                         trades, capital_final, bloq_derrota, bloq_vitoria = simular_estrategia(
                             df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem
                         )
-                        mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria)
+                        mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria, max_losses, max_wins)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Bot Escada Dinâmica v1.0")
