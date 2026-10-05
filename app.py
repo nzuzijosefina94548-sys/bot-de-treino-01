@@ -169,6 +169,10 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
     horario_entrada = None
     
     perda_total_anterior = 0.0
+    
+    # --- CONTADORES DE BLOQUEIO ---
+    bloqueios_por_derrota = 0
+    bloqueios_por_vitoria = 0
 
     for i, row in df.iterrows():
         high, low, close, ts = row['high'], row['low'], row['close'], row['timestamp']
@@ -209,7 +213,7 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 perda_total_anterior = abs(pnl_pct / 100) + fee
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
-                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
+                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital, "Bloqueado?": "Não"})
                 losses += 1
                 wins = 0
                 direction = -1
@@ -231,7 +235,7 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 perda_total_anterior = 0.0
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
-                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
+                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital, "Bloqueado?": "Não"})
                 wins += 1
                 losses = 0
                 ref_price = tp
@@ -247,7 +251,7 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 perda_total_anterior = abs(pnl_pct / 100) + fee
                 trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
-                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
+                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital, "Bloqueado?": "Não"})
                 losses += 1
                 wins = 0
                 direction = 1
@@ -269,7 +273,7 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 perda_total_anterior = 0.0
                 trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
-                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
+                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital, "Bloqueado?": "Não"})
                 wins += 1
                 losses = 0
                 ref_price = tp
@@ -279,17 +283,45 @@ def simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, ban
                 sl = entry_price * (1 + step + fee)
                 horario_entrada = ts
 
-        if wins >= max_wins or losses >= max_losses:
+        # --- VERIFICAÇÃO DE BLOQUEIO ---
+        if losses >= max_losses:
             blocked = True
+            bloqueios_por_derrota += 1
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital, "Bloqueado?": f"Sim (Derrota #{bloqueios_por_derrota})"})
+            wins = 0
+            losses = 0
+            
+        if wins >= max_wins:
+            blocked = True
+            bloqueios_por_vitoria += 1
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital, "Bloqueado?": f"Sim (Vitória #{bloqueios_por_vitoria})"})
             wins = 0
             losses = 0
 
-    return trades, capital
+    return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
 
-def mostrar_resultados(df, trades, capital_final, banca_inicial):
+def mostrar_resultados(df, trades, capital_final, banca_inicial, bloqueios_derrota, bloqueios_vitoria):
     if trades:
         df_trades = pd.DataFrame(trades)
-        total_trades = len(df_trades)
+        
+        # --- PAINEL DE AVISO ---
+        if bloqueios_derrota > 0 or bloqueios_vitoria > 0:
+            st.markdown("---")
+            col_aviso1, col_aviso2 = st.columns(2)
+            if bloqueios_derrota > 0:
+                col_aviso1.error(f"🚨 **BLOQUEIO POR DERROTAS:** O bot foi bloqueado **{bloqueios_derrota}** vez(es) por atingir o limite de {max_losses} derrotas seguidas.")
+            else:
+                col_aviso1.success("✅ Nenhum bloqueio por derrotas.")
+                
+            if bloqueios_vitoria > 0:
+                col_aviso2.success(f"🎉 **BLOQUEIO POR VITÓRIAS:** O bot foi bloqueado **{bloqueios_vitoria}** vez(es) por atingir a meta de {max_wins} vitórias seguidas.")
+            else:
+                col_aviso2.info("ℹ️ Nenhum bloqueio por vitórias.")
+            st.markdown("---")
+        
+        total_trades = len(df_trades[df_trades['Resultado'] != 'BLOQUEIO'])
         vitorias = len(df_trades[df_trades['Resultado'] == 'Alvo'])
         derrotas = len(df_trades[df_trades['Resultado'] == 'Stop'])
         taxa_acerto = (vitorias / total_trades) * 100 if total_trades > 0 else 0
@@ -339,8 +371,10 @@ if modo == "Backtest (Passado)":
         with st.spinner("Baixando dados do Yahoo Finance e simulando..."):
             df = baixar_dados_yahoo(symbol, timeframe, str(data_inicio), str(data_fim))
             if not df.empty:
-                trades, capital_final = simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem)
-                mostrar_resultados(df, trades, capital_final, banca_inicial)
+                trades, capital_final, bloq_derrota, bloq_vitoria = simular_estrategia(
+                    df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem
+                )
+                mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria)
 
 # ========================================================================= //
 # MODO LIVE/DEMO (BINANCE)
@@ -355,7 +389,6 @@ if modo == "Live/Demo (Tempo Real)":
         if func_demo == "1 - Teste em Tempo Real (Ação Automática)":
             st.subheader("🔴 Teste em Tempo Real - Ação Automática")
             
-            # --- PAINEL DE CONTROLE ---
             if "bot_ativo" not in st.session_state:
                 st.session_state.bot_ativo = True
             if "capital_atual" not in st.session_state:
@@ -372,7 +405,15 @@ if modo == "Live/Demo (Tempo Real)":
                 st.session_state.wins = 0
             if "losses" not in st.session_state:
                 st.session_state.losses = 0
+            if "bloqueado" not in st.session_state:
+                st.session_state.bloqueado = False
 
+            # --- PAINEL DE AVISO NO TOPO ---
+            if st.session_state.bloqueado:
+                st.error("🚨 **BOT BLOQUEADO!** O limite de derrotas ou vitórias seguidas foi atingido. O bot está pausado. Clique em 'RESETAR BOT' para continuar.")
+            else:
+                st.success("🟢 **BOT ATIVO!** A operar normalmente.")
+            
             # --- PAINEL DE CONTROLE VISUAL ---
             col_painel1, col_painel2, col_painel3, col_painel4 = st.columns(4)
             col_painel1.metric("Capital Atual", f"${st.session_state.capital_atual:.2f}")
@@ -394,13 +435,14 @@ if modo == "Live/Demo (Tempo Real)":
                     st.session_state.direction = 0
                     st.session_state.wins = 0
                     st.session_state.losses = 0
+                    st.session_state.bloqueado = False
                     st.rerun()
             with col_btn3:
                 st.metric("Estado", "🟢 ATIVO" if st.session_state.bot_ativo else "🔴 PAUSADO")
 
             st.markdown("---")
 
-            if st.session_state.bot_ativo:
+            if st.session_state.bot_ativo and not st.session_state.bloqueado:
                 if st.button("🚀 Iniciar Verificação Automática"):
                     try:
                         client = Client(api_key, secret_key, testnet=True)
@@ -410,8 +452,8 @@ if modo == "Live/Demo (Tempo Real)":
                         status_text = st.empty()
                         
                         for i in range(num_verificacoes):
-                            if not st.session_state.bot_ativo:
-                                st.warning("Bot pausado pelo utilizador.")
+                            if not st.session_state.bot_ativo or st.session_state.bloqueado:
+                                st.warning("Bot pausado ou bloqueado.")
                                 break
                                 
                             ticker = client.get_symbol_ticker(symbol=symbol)
@@ -427,7 +469,6 @@ if modo == "Live/Demo (Tempo Real)":
                                     st.session_state.direction = 1
                                     st.session_state.ref_price = preco * (1 + step)
                                     st.session_state.wins += 1
-                                    # Simulação de lucro
                                     lucro = banca_inicial * step * alavancagem
                                     st.session_state.capital_atual += lucro
                                     st.session_state.pnl_total += lucro
@@ -436,10 +477,14 @@ if modo == "Live/Demo (Tempo Real)":
                                     st.session_state.direction = -1
                                     st.session_state.ref_price = preco * (1 - step)
                                     st.session_state.losses += 1
-                                    # Simulação de perda
                                     perda = banca_inicial * step * alavancagem
                                     st.session_state.capital_atual -= perda
                                     st.session_state.pnl_total -= perda
+                                
+                                # Verifica bloqueio
+                                if st.session_state.losses >= max_losses or st.session_state.wins >= max_wins:
+                                    st.session_state.bloqueado = True
+                                    st.session_state.log.append(f"🚨 BLOQUEIO ATIVADO! (Derrotas: {st.session_state.losses} | Vitórias: {st.session_state.wins})")
 
                             status_text.text(f"Verificação {i+1}/{num_verificacoes} | Preço: ${preco:,.2f}")
                             progress_bar.progress((i + 1) / num_verificacoes)
@@ -451,7 +496,7 @@ if modo == "Live/Demo (Tempo Real)":
                     except Exception as e:
                         st.error(f"Erro na conexão: {e}")
             else:
-                st.warning("🔴 O bot está PAUSADO. Clique em 'RETOMAR BOT' para continuar.")
+                st.warning("🔴 O bot está PAUSADO ou BLOQUEADO. Clique em 'RESETAR BOT' ou 'RETOMAR BOT'.")
 
             st.subheader("📜 Log de Atividades")
             for linha in reversed(st.session_state.log[-20:]):
@@ -472,8 +517,10 @@ if modo == "Live/Demo (Tempo Real)":
                 with st.spinner("Baixando dados da Binance Demo e simulando..."):
                     df = baixar_dados_binance_demo(api_key, secret_key, symbol, timeframe, str(data_inicio_demo), str(data_fim_demo))
                     if not df.empty:
-                        trades, capital_final = simular_estrategia(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem)
-                        mostrar_resultados(df, trades, capital_final, banca_inicial)
+                        trades, capital_final, bloq_derrota, bloq_vitoria = simular_estrategia(
+                            df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem
+                        )
+                        mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Bot Escada Dinâmica v1.0")
