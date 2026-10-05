@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: bot-trading
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    plan: free
+    envVars:
+      - key: API_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: SYMBOL
+        value: BTCUSDT
+      - key: INTERVALO
+        value: "30"
+      - key: LUCRO_DESEJADO
+        value: "1.0"
+      - key: TAXA
+        value: "0.1"
+      - key: BANCA_INICIAL
+        value: "1000"
+      - key: ALAVANCAGEM
+        value: "1"
+      - key: MAX_VITORIAS
+        value: "3"
+      - key: MAX_DERROTAS
+        value: "3"
+      - key: ESTRATEGIA
+        value: "1"
