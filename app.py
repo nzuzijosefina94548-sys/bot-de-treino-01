@@ -1,293 +1,492 @@
-import os
-import time
-import threading
-from datetime import datetime
-from flask import Flask, jsonify
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import yfinance as yf
 from binance.client import Client
+import time
 
 # ========================================================================= //
-# SERVIDOR WEB (Para o Render manter o bot acordado)
+# CONFIGURAÇÃO DA PÁGINA
 # ========================================================================= //
-app = Flask(__name__)
+st.set_page_config(page_title="Bot Escada Dinâmica", page_icon="🤖", layout="wide")
+st.title("🤖 Painel do Bot - Múltiplas Estratégias")
 
 # ========================================================================= //
-# CONFIGURAÇÕES (LIDAS DAS VARIÁVEIS DE AMBIENTE DO RENDER)
+# MENU LATERAL (CONFIGURAÇÕES)
 # ========================================================================= //
-API_KEY = os.environ.get("API_KEY", "")
-SECRET_KEY = os.environ.get("SECRET_KEY", "")
+st.sidebar.header("⚙️ Configurações")
 
-config = {
-    "symbol": os.environ.get("SYMBOL", "BTCUSDT"),
-    "intervalo": int(os.environ.get("INTERVALO", "30")),
-    "lucro_desejado": float(os.environ.get("LUCRO_DESEJADO", "1.0")) / 100,
-    "taxa": float(os.environ.get("TAXA", "0.1")) / 100,
-    "banca_inicial": float(os.environ.get("BANCA_INICIAL", "1000.0")),
-    "alavancagem": int(os.environ.get("ALAVANCAGEM", "1")),
-    "max_vitorias": int(os.environ.get("MAX_VITORIAS", "3")),
-    "max_derrotas": int(os.environ.get("MAX_DERROTAS", "3")),
-    "estrategia": int(os.environ.get("ESTRATEGIA", "1"))
-}
+modo = st.sidebar.selectbox("Modo de Operação", ["Backtest (Passado)", "Live/Demo (Tempo Real)"])
 
-# ========================================================================= //
-# ESTADO GLOBAL DO BOT (Para consulta via web)
-# ========================================================================= //
-estado = {
-    "ativo": False,
-    "capital": config["banca_inicial"],
-    "preco_atual": 0.0,
-    "preco_referencia": 0.0,
-    "direcao": "NEUTRO",
-    "vitorias": 0,
-    "derrotas": 0,
-    "perda_anterior": 0.0,
-    "bloqueado": False,
-    "ultima_atualizacao": "—",
-    "logs": []
-}
+st.sidebar.subheader("💰 Banca e Risco")
+banca_inicial = st.sidebar.number_input("Banca Inicial (USDT)", min_value=10.0, max_value=1000000.0, value=1000.0, step=100.0)
+usar_alavancagem = st.sidebar.checkbox("Usar Alavancagem?", value=False)
+if usar_alavancagem:
+    alavancagem = st.sidebar.slider("Alavancagem (x)", min_value=1, max_value=20, value=1, step=1)
+else:
+    alavancagem = 1
 
-def log(msg):
-    """Adiciona mensagem ao log e imprime no console."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    linha = f"[{timestamp}] {msg}"
-    print(linha)
-    estado["logs"].append(linha)
-    if len(estado["logs"]) > 50:
-        estado["logs"].pop(0)
+st.sidebar.subheader("Parâmetros da Estratégia")
+symbol = st.sidebar.text_input("Par (ex: BTCUSDT)", "BTCUSDT")
 
-# ========================================================================= //
-# FUNÇÕES DA ESTRATÉGIA
-# ========================================================================= //
-def calcular_fator_alvo(perda_anterior):
-    if config["estrategia"] == 1:  # Normal
-        return config["lucro_desejado"] + config["taxa"]
-    elif config["estrategia"] == 2:  # Recuperação Cirúrgica
-        if perda_anterior > 0:
-            return perda_anterior + config["taxa"] * 2 + config["lucro_desejado"]
-        else:
-            return config["lucro_desejado"] + config["taxa"]
-    else:  # Recuperação Simples
-        if perda_anterior > 0:
-            return perda_anterior + config["taxa"] * 2
-        else:
-            return config["lucro_desejado"] + config["taxa"]
+timeframe = st.sidebar.selectbox(
+    "Timeframe",
+    ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1s", "1M", "3M", "1A"],
+    index=4
+)
+
+# --- SELETOR DE ESTRATÉGIA (4 OPÇÕES AGORA) ---
+st.sidebar.subheader("🎯 Estratégia")
+tipo_estrategia = st.sidebar.radio(
+    "Escolha a estratégia:",
+    [
+        "Normal (Alvo Fixo)",
+        "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)",
+        "Recuperação Simples (Apenas Perda Anterior + Taxas)",
+        "Rompimento EMA"
+    ]
+)
+
+# --- PARÂMETROS ESPECÍFICOS DE CADA ESTRATÉGIA ---
+if tipo_estrategia == "Rompimento EMA":
+    st.sidebar.subheader("📊 Parâmetros EMA")
+    ema_periodo = st.sidebar.number_input("Período da EMA", min_value=2, max_value=500, value=30)
+    ema_stop_pct = st.sidebar.number_input("Stop Loss (%)", min_value=0.01, max_value=10.0, value=0.15, step=0.01) / 100
+    ema_alvo_mult = st.sidebar.number_input("Multiplicador do Alvo (x Stop)", min_value=0.5, max_value=50.0, value=8.0, step=0.5)
+else:
+    step = st.sidebar.number_input("Lucro Desejado (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1) / 100
+    fee = st.sidebar.number_input("Taxa da Corretora (%)", min_value=0.01, max_value=1.0, value=0.10, step=0.01) / 100
+
+max_wins = st.sidebar.number_input("Máx. Vitórias Seguidas", min_value=1, max_value=50, value=3)
+max_losses = st.sidebar.number_input("Máx. Derrotas Seguidas", min_value=1, max_value=50, value=3)
+
+if modo == "Backtest (Passado)":
+    st.sidebar.subheader("Período do Backtest")
+    data_inicio = st.sidebar.date_input("Data de Início", datetime.now() - timedelta(days=30))
+    data_fim = st.sidebar.date_input("Data de Fim", datetime.now())
+
+if modo == "Live/Demo (Tempo Real)":
+    st.sidebar.subheader("Credenciais da Demo (Binance)")
+    api_key = st.sidebar.text_input("API Key", type="password")
+    secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# LOOP PRINCIPAL DO BOT
+# FUNÇÕES DO BOT
 # ========================================================================= //
-def bot_loop():
-    log("🤖 BOT INICIADO!")
-    log(f"   Par: {config['symbol']} | Estratégia: {config['estrategia']}")
-    log(f"   Banca: ${config['banca_inicial']:.2f} | Alavancagem: {config['alavancagem']}x")
-    log(f"   Lucro: {config['lucro_desejado']*100}% | Taxa: {config['taxa']*100}%")
-
-    if not API_KEY or not SECRET_KEY:
-        log("❌ ERRO: API_KEY ou SECRET_KEY não configuradas!")
-        return
-
+@st.cache_data(ttl=300)
+def baixar_dados_yahoo(symbol, timeframe, start_str, end_str):
     try:
-        client = Client(API_KEY, SECRET_KEY, testnet=True)
-        client.API_URL = 'https://testnet.binance.vision/api'
-    except Exception as e:
-        log(f"❌ Erro ao conectar à Binance: {e}")
-        return
-
-    capital = config["banca_inicial"]
-    preco_referencia = None
-    direcao = 0
-    preco_entrada = None
-    alvo = None
-    stop = None
-    vitorias = 0
-    derrotas = 0
-    perda_anterior = 0.0
-    bloqueado = False
-
-    estado["ativo"] = True
-
-    while estado["ativo"]:
-        try:
-            ticker = client.get_symbol_ticker(symbol=config["symbol"])
-            preco = float(ticker['price'])
-            estado["preco_atual"] = preco
-            estado["ultima_atualizacao"] = datetime.now().strftime("%H:%M:%S")
-
-            if preco_referencia is None:
-                preco_referencia = preco
-                estado["preco_referencia"] = preco
-                log(f"📌 Preço de referência: ${preco_referencia:,.2f}")
-                time.sleep(config["intervalo"])
-                continue
-
-            if bloqueado:
-                log(f"🔒 BLOQUEADO | V:{vitorias} D:{derrotas}")
-                time.sleep(config["intervalo"])
-                continue
-
-            if direcao == 0:
-                fator = calcular_fator_alvo(perda_anterior)
-                if preco >= preco_referencia * (1 + config["lucro_desejado"]):
-                    direcao = 1
-                    preco_entrada = preco_referencia * (1 + config["lucro_desejado"])
-                    alvo = preco_entrada * (1 + fator)
-                    stop = preco_entrada * (1 - config["lucro_desejado"] - config["taxa"])
-                    log(f"🟢 GATILHO ALTA | Entrada: ${preco_entrada:,.2f} | Alvo: ${alvo:,.2f} | Stop: ${stop:,.2f}")
-                elif preco <= preco_referencia * (1 - config["lucro_desejado"]):
-                    direcao = -1
-                    preco_entrada = preco_referencia * (1 - config["lucro_desejado"])
-                    alvo = preco_entrada * (1 - fator)
-                    stop = preco_entrada * (1 + config["lucro_desejado"] + config["taxa"])
-                    log(f"🔴 GATILHO BAIXA | Entrada: ${preco_entrada:,.2f} | Alvo: ${alvo:,.2f} | Stop: ${stop:,.2f}")
-
-            elif direcao == 1:
-                if preco >= alvo:
-                    lucro_pct = ((alvo - preco_entrada) / preco_entrada) * 100
-                    capital *= (1 + (lucro_pct * config["alavancagem"]) / 100)
-                    vitorias += 1
-                    derrotas = 0
-                    perda_anterior = 0.0
-                    log(f"✅ ALVO | Lucro: {lucro_pct:.2f}% | Capital: ${capital:.2f}")
-                    preco_referencia = alvo
-                    direcao = 0
-                elif preco <= stop:
-                    perda_pct = ((preco_entrada - stop) / preco_entrada) * 100
-                    capital *= (1 - (perda_pct * config["alavancagem"]) / 100)
-                    derrotas += 1
-                    vitorias = 0
-                    perda_anterior = abs(perda_pct / 100) + config["taxa"]
-                    log(f"❌ STOP | Perda: {perda_pct:.2f}% | Capital: ${capital:.2f}")
-                    preco_referencia = stop
-                    direcao = -1
-                    preco_entrada = stop
-                    fator = calcular_fator_alvo(perda_anterior)
-                    alvo = preco_entrada * (1 - fator)
-                    stop = preco_entrada * (1 + config["lucro_desejado"] + config["taxa"])
-
-            elif direcao == -1:
-                if preco <= alvo:
-                    lucro_pct = ((preco_entrada - alvo) / preco_entrada) * 100
-                    capital *= (1 + (lucro_pct * config["alavancagem"]) / 100)
-                    vitorias += 1
-                    derrotas = 0
-                    perda_anterior = 0.0
-                    log(f"✅ ALVO | Lucro: {lucro_pct:.2f}% | Capital: ${capital:.2f}")
-                    preco_referencia = alvo
-                    direcao = 0
-                elif preco >= stop:
-                    perda_pct = ((stop - preco_entrada) / preco_entrada) * 100
-                    capital *= (1 - (perda_pct * config["alavancagem"]) / 100)
-                    derrotas += 1
-                    vitorias = 0
-                    perda_anterior = abs(perda_pct / 100) + config["taxa"]
-                    log(f"❌ STOP | Perda: {perda_pct:.2f}% | Capital: ${capital:.2f}")
-                    preco_referencia = stop
-                    direcao = 1
-                    preco_entrada = stop
-                    fator = calcular_fator_alvo(perda_anterior)
-                    alvo = preco_entrada * (1 + fator)
-                    stop = preco_entrada * (1 - config["lucro_desejado"] - config["taxa"])
-
-            if vitorias >= config["max_vitorias"] or derrotas >= config["max_derrotas"]:
-                bloqueado = True
-                log(f"🚨 BLOQUEIO! V:{vitorias} D:{derrotas}")
-
-            # Atualizar estado global
-            estado["capital"] = capital
-            estado["vitorias"] = vitorias
-            estado["derrotas"] = derrotas
-            estado["perda_anterior"] = perda_anterior
-            estado["bloqueado"] = bloqueado
-            estado["direcao"] = "NEUTRO" if direcao == 0 else ("LONG" if direcao == 1 else "SHORT")
-
-            time.sleep(config["intervalo"])
-
-        except Exception as e:
-            log(f"⚠️ Erro: {e}")
-            time.sleep(config["intervalo"])
-
-    log("⏹️ BOT PARADO.")
-    estado["ativo"] = False
-
-# ========================================================================= //
-# ROTAS DO SERVIDOR WEB
-# ========================================================================= //
-@app.route('/')
-def home():
-    """Página principal com o estado do bot em HTML."""
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Bot Escada Dinâmica</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="refresh" content="10">
-        <style>
-            body {{ font-family: Arial; background: #1a1a2e; color: #eee; padding: 15px; }}
-            .card {{ background: #16213e; border-radius: 10px; padding: 15px; margin: 10px 0; }}
-            h1 {{ color: #00ff88; font-size: 22px; }}
-            .metric {{ display: inline-block; margin: 8px 15px 8px 0; }}
-            .value {{ font-size: 24px; color: #00ff88; }}
-            .label {{ font-size: 12px; color: #999; }}
-            .log {{ font-family: monospace; font-size: 11px; background: #0f0f1e; padding: 10px; border-radius: 5px; max-height: 400px; overflow-y: auto; }}
-            .green {{ color: #00ff88; }}
-            .red {{ color: #ff4444; }}
-            .yellow {{ color: #ffcc00; }}
-        </style>
-    </head>
-    <body>
-        <h1>🤖 Bot Escada Dinâmica</h1>
+        ticker = symbol.replace("USDT", "-USD")
+        yf_interval = timeframe
+        if timeframe == "2h": yf_interval = "1h"
+        elif timeframe == "4h": yf_interval = "1h"
+        elif timeframe == "6h": yf_interval = "1h"
+        elif timeframe == "12h": yf_interval = "1h"
+        elif timeframe == "3d": yf_interval = "1d"
+        elif timeframe == "1A": yf_interval = "1mo"
+        elif timeframe == "1s": yf_interval = "1wk"
+        elif timeframe == "1M": yf_interval = "1mo"
+        elif timeframe == "3M": yf_interval = "3mo"
         
-        <div class="card">
-            <h2>📊 Estado</h2>
-            <div class="metric"><span class="label">Estado</span><br><span class="value {'green' if estado['ativo'] else 'red'}">{'ATIVO' if estado['ativo'] else 'PARADO'}</span></div>
-            <div class="metric"><span class="label">Capital</span><br><span class="value">${estado['capital']:.2f}</span></div>
-            <div class="metric"><span class="label">Direção</span><br><span class="value yellow">{estado['direcao']}</span></div>
-            <div class="metric"><span class="label">Bloqueado</span><br><span class="value {'red' if estado['bloqueado'] else 'green'}">{'SIM' if estado['bloqueado'] else 'NÃO'}</span></div>
-        </div>
-
-        <div class="card">
-            <h2>💹 Mercado</h2>
-            <div class="metric"><span class="label">Preço Atual</span><br><span class="value">${estado['preco_atual']:,.2f}</span></div>
-            <div class="metric"><span class="label">Preço Referência</span><br><span class="value">${estado['preco_referencia']:,.2f}</span></div>
-            <div class="metric"><span class="label">Última Atualização</span><br><span class="value">{estado['ultima_atualizacao']}</span></div>
-        </div>
-
-        <div class="card">
-            <h2>🎯 Desempenho</h2>
-            <div class="metric"><span class="label">Vitórias</span><br><span class="value green">{estado['vitorias']}</span></div>
-            <div class="metric"><span class="label">Derrotas</span><br><span class="value red">{estado['derrotas']}</span></div>
-            <div class="metric"><span class="label">Perda Anterior</span><br><span class="value">${estado['perda_anterior']:.4f}</span></div>
-        </div>
-
-        <div class="card">
-            <h2>📜 Logs (últimos 20)</h2>
-            <div class="log">
-                {'<br>'.join(estado['logs'][-20:])}
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    return html
-
-@app.route('/status')
-def status():
-    """Endpoint JSON com o estado atual."""
-    return jsonify(estado)
-
-@app.route('/health')
-def health():
-    """Endpoint para o Render verificar se está vivo."""
-    return "OK", 200
+        df = yf.download(ticker, start=start_str, end=end_str, interval=yf_interval, progress=False)
+        
+        if df.empty:
+            st.warning(f"Não foi possível baixar os dados para o timeframe {timeframe}.")
+            return pd.DataFrame()
+            
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df.reset_index(inplace=True)
+        df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'}, inplace=True)
+        
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df['open'] = pd.to_numeric(df['open'], errors='coerce')
+        df['high'] = pd.to_numeric(df['high'], errors='coerce')
+        df['low'] = pd.to_numeric(df['low'], errors='coerce')
+        df['close'] = pd.to_numeric(df['close'], errors='coerce')
+        
+        df.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
+        
+        return df
+    except Exception as e:
+        st.error(f"Erro ao baixar dados: {e}")
+        return pd.DataFrame()
 
 # ========================================================================= //
-# INICIALIZAÇÃO
+# ESTRATÉGIA 1, 2, 3 - ESCADA DINÂMICA
 # ========================================================================= //
-def iniciar_bot():
-    """Inicia o bot numa thread separada."""
-    bot_thread = threading.Thread(target=bot_loop, daemon=True)
-    bot_thread.start()
+def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem):
+    trades = []
+    capital = banca_inicial
+    ref_price = df['close'].iloc[0]
+    direction = 0
+    entry_price = None
+    tp = None
+    sl = None
+    wins = 0
+    losses = 0
+    blocked = False
+    horario_entrada = None
+    
+    perda_total_anterior = 0.0
+    bloqueios_por_derrota = 0
+    bloqueios_por_vitoria = 0
 
-if __name__ == "__main__":
-    iniciar_bot()
-    porta = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=porta)
+    for i, row in df.iterrows():
+        high, low, close, ts = row['high'], row['low'], row['close'], row['timestamp']
+
+        if blocked:
+            continue
+
+        if direction == 0:
+            if tipo_estrategia == "Normal (Alvo Fixo)":
+                fator_alvo = step + fee
+            elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
+                if perda_total_anterior > 0:
+                    fator_alvo = perda_total_anterior + fee + fee + step
+                else:
+                    fator_alvo = step + fee
+            else:
+                if perda_total_anterior > 0:
+                    fator_alvo = perda_total_anterior + fee + fee
+                else:
+                    fator_alvo = step + fee
+
+            if high >= ref_price * (1 + step):
+                direction = 1
+                entry_price = ref_price * (1 + step)
+                tp = entry_price * (1 + fator_alvo)
+                sl = entry_price * (1 - step - fee)
+                horario_entrada = ts
+            elif low <= ref_price * (1 - step):
+                direction = -1
+                entry_price = ref_price * (1 - step)
+                tp = entry_price * (1 - fator_alvo)
+                sl = entry_price * (1 + step + fee)
+                horario_entrada = ts
+
+        elif direction == 1:
+            if low <= sl:
+                pnl_pct = ((sl - entry_price) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                perda_total_anterior = abs(pnl_pct / 100) + fee
+                trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
+                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
+                losses += 1
+                wins = 0
+                direction = -1
+                ref_price = sl
+                entry_price = sl
+                
+                if tipo_estrategia == "Normal (Alvo Fixo)":
+                    fator_alvo = step + fee
+                elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
+                    fator_alvo = perda_total_anterior + fee + fee + step
+                else:
+                    fator_alvo = perda_total_anterior + fee + fee
+                tp = entry_price * (1 - fator_alvo)
+                sl = entry_price * (1 + step + fee)
+                horario_entrada = ts
+                
+            elif high >= tp:
+                pnl_pct = ((tp - entry_price) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                perda_total_anterior = 0.0
+                trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
+                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
+                wins += 1
+                losses = 0
+                ref_price = tp
+                entry_price = tp
+                fator_alvo = step + fee
+                tp = entry_price * (1 + fator_alvo)
+                sl = entry_price * (1 - step - fee)
+                horario_entrada = ts
+
+        elif direction == -1:
+            if high >= sl:
+                pnl_pct = ((entry_price - sl) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                perda_total_anterior = abs(pnl_pct / 100) + fee
+                trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
+                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
+                losses += 1
+                wins = 0
+                direction = 1
+                ref_price = sl
+                entry_price = sl
+                
+                if tipo_estrategia == "Normal (Alvo Fixo)":
+                    fator_alvo = step + fee
+                elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
+                    fator_alvo = perda_total_anterior + fee + fee + step
+                else:
+                    fator_alvo = perda_total_anterior + fee + fee
+                tp = entry_price * (1 + fator_alvo)
+                sl = entry_price * (1 - step - fee)
+                horario_entrada = ts
+                
+            elif low <= tp:
+                pnl_pct = ((entry_price - tp) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                perda_total_anterior = 0.0
+                trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
+                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
+                wins += 1
+                losses = 0
+                ref_price = tp
+                entry_price = tp
+                fator_alvo = step + fee
+                tp = entry_price * (1 - fator_alvo)
+                sl = entry_price * (1 + step + fee)
+                horario_entrada = ts
+
+        if losses >= max_losses:
+            blocked = True
+            bloqueios_por_derrota += 1
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
+            wins = 0
+            losses = 0
+            
+        if wins >= max_wins:
+            blocked = True
+            bloqueios_por_vitoria += 1
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
+            wins = 0
+            losses = 0
+
+    return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
+
+# ========================================================================= //
+# ESTRATÉGIA 4 - ROMPIMENTO EMA
+# ========================================================================= //
+def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_losses, banca_inicial, alavancagem):
+    trades = []
+    capital = banca_inicial
+    
+    # Calcular a EMA
+    df = df.copy()
+    df['ema'] = df['close'].ewm(span=ema_periodo, adjust=False).mean()
+    
+    # Estado do alerta
+    alerta_compra = False
+    alerta_venda = False
+    maxima_vela_alerta = None
+    minima_vela_alerta = None
+    
+    direcao = 0
+    entry_price = None
+    tp = None
+    sl = None
+    wins = 0
+    losses = 0
+    blocked = False
+    horario_entrada = None
+    bloqueios_por_derrota = 0
+    bloqueios_por_vitoria = 0
+    
+    alvo_pct = stop_pct * alvo_mult
+
+    for i, row in df.iterrows():
+        if i == 0:
+            continue
+        
+        high, low, close, ts, ema = row['high'], row['low'], row['close'], row['timestamp'], row['ema']
+        prev_close = df['close'].iloc[i-1]
+        prev_ema = df['ema'].iloc[i-1]
+
+        if blocked:
+            continue
+
+        # --- DETECÇÃO DE CRUZAMENTO ---
+        if prev_close <= prev_ema and close > ema:  # Cruzamento para cima
+            alerta_compra = True
+            alerta_venda = False
+            maxima_vela_alerta = high
+        elif prev_close >= prev_ema and close < ema:  # Cruzamento para baixo
+            alerta_venda = True
+            alerta_compra = False
+            minima_vela_alerta = low
+
+        # --- ENTRADAS (SE NÃO TIVER POSIÇÃO) ---
+        if direcao == 0:
+            if alerta_compra and high > maxima_vela_alerta:
+                direcao = 1
+                entry_price = maxima_vela_alerta
+                sl = entry_price * (1 - stop_pct)
+                tp = entry_price * (1 + alvo_pct)
+                horario_entrada = ts
+                alerta_compra = False
+            elif alerta_venda and low < minima_vela_alerta:
+                direcao = -1
+                entry_price = minima_vela_alerta
+                sl = entry_price * (1 + stop_pct)
+                tp = entry_price * (1 - alvo_pct)
+                horario_entrada = ts
+                alerta_venda = False
+
+        # --- GESTÃO DE POSIÇÃO LONG ---
+        elif direcao == 1:
+            if low <= sl:
+                pnl_pct = ((sl - entry_price) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
+                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
+                losses += 1
+                wins = 0
+                direcao = 0
+            elif high >= tp:
+                pnl_pct = ((tp - entry_price) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
+                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
+                wins += 1
+                losses = 0
+                direcao = 0
+
+        # --- GESTÃO DE POSIÇÃO SHORT ---
+        elif direcao == -1:
+            if high >= sl:
+                pnl_pct = ((entry_price - sl) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
+                                "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
+                losses += 1
+                wins = 0
+                direcao = 0
+            elif low <= tp:
+                pnl_pct = ((entry_price - tp) / entry_price) * 100
+                capital *= (1 + (pnl_pct * alavancagem) / 100)
+                trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
+                                "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
+                wins += 1
+                losses = 0
+                direcao = 0
+
+        # --- BLOQUEIOS ---
+        if losses >= max_losses:
+            blocked = True
+            bloqueios_por_derrota += 1
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
+            wins = 0
+            losses = 0
+        if wins >= max_wins:
+            blocked = True
+            bloqueios_por_vitoria += 1
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
+            wins = 0
+            losses = 0
+
+    return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
+
+# ========================================================================= //
+# MOSTRAR RESULTADOS
+# ========================================================================= //
+def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria, max_losses, max_wins, tipo_estrategia):
+    if trades:
+        df_trades = pd.DataFrame(trades)
+        
+        if bloq_derrota > 0 or bloq_vitoria > 0:
+            st.markdown("---")
+            col_aviso1, col_aviso2 = st.columns(2)
+            if bloq_derrota > 0:
+                col_aviso1.error(f"🚨 **BLOQUEIO POR DERROTAS:** O bot foi bloqueado **{bloq_derrota}** vez(es) por atingir o limite de {max_losses} derrotas seguidas.")
+            else:
+                col_aviso1.success("✅ Nenhum bloqueio por derrotas.")
+                
+            if bloq_vitoria > 0:
+                col_aviso2.success(f"🎉 **BLOQUEIO POR VITÓRIAS:** O bot foi bloqueado **{bloq_vitoria}** vez(es) por atingir a meta de {max_wins} vitórias seguidas.")
+            else:
+                col_aviso2.info("ℹ️ Nenhum bloqueio por vitórias.")
+            st.markdown("---")
+        
+        df_normal = df_trades[df_trades['Resultado'] != 'BLOQUEIO']
+        total_trades = len(df_normal)
+        vitorias = len(df_normal[df_normal['Resultado'] == 'Alvo'])
+        derrotas = len(df_normal[df_normal['Resultado'] == 'Stop'])
+        taxa_acerto = (vitorias / total_trades) * 100 if total_trades > 0 else 0
+        lucro_total = ((capital_final - banca_inicial) / banca_inicial) * 100
+
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1.metric("Total de Trades", total_trades)
+        col2.metric("Vencedores", vitorias)
+        col3.metric("Perdedores", derrotas)
+        col4.metric("Taxa de Acerto", f"{taxa_acerto:.1f}%")
+        col5.metric("Lucro Total", f"{lucro_total:.2f}%")
+        col6.metric("Capital Final", f"${capital_final:.2f}")
+
+        st.subheader("📈 Curva de Capital")
+        fig_equity = go.Figure()
+        fig_equity.add_trace(go.Scatter(x=df_trades['Data'], y=df_trades['Capital'],
+                                         mode='lines+markers', name='Capital',
+                                         line=dict(color='#00ff88', width=2)))
+        fig_equity.update_layout(template="plotly_dark", height=400)
+        st.plotly_chart(fig_equity, use_container_width=True)
+
+        st.subheader("📉 Preço com Entradas e Saídas")
+        fig_price = go.Figure(data=[go.Candlestick(x=df['timestamp'], open=df['open'],
+                                                    high=df['high'], low=df['low'],
+                                                    close=df['close'], name='Preço')])
+        
+        # Adiciona a EMA ao gráfico se for a estratégia de Rompimento
+        if tipo_estrategia == "Rompimento EMA":
+            df_plot = df.copy()
+            df_plot['ema'] = df_plot['close'].ewm(span=ema_periodo, adjust=False).mean()
+            fig_price.add_trace(go.Scatter(x=df_plot['timestamp'], y=df_plot['ema'],
+                                            mode='lines', name='EMA', line=dict(color='yellow', width=2)))
+        
+        longs = df_normal[df_normal['Direção'] == 'Long']
+        shorts = df_normal[df_normal['Direção'] == 'Short']
+        fig_price.add_trace(go.Scatter(x=longs['Data'], y=longs['Entrada'], mode='markers',
+                                        name='Compra', marker=dict(color='#00ff88', size=10, symbol='triangle-up')))
+        fig_price.add_trace(go.Scatter(x=shorts['Data'], y=shorts['Entrada'], mode='markers',
+                                        name='Venda', marker=dict(color='#ff4444', size=10, symbol='triangle-down')))
+        fig_price.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig_price, use_container_width=True)
+
+        st.subheader("📋 Histórico de Operações")
+        st.dataframe(df_trades, use_container_width=True)
+    else:
+        st.warning("Nenhum trade foi gerado no período.")
+
+# ========================================================================= //
+# MODO BACKTEST
+# ========================================================================= //
+if modo == "Backtest (Passado)":
+    st.subheader(f"📊 Backtest {symbol} | Timeframe: {timeframe} | Estratégia: {tipo_estrategia} | Banca: ${banca_inicial} | Alavancagem: {alavancagem}x")
+
+    if st.button("🚀 Rodar Backtest (Yahoo Finance)", type="primary"):
+        with st.spinner("Baixando dados do Yahoo Finance e simulando..."):
+            df = baixar_dados_yahoo(symbol, timeframe, str(data_inicio), str(data_fim))
+            if not df.empty:
+                if tipo_estrategia == "Rompimento EMA":
+                    trades, capital_final, bloq_derrota, bloq_vitoria = simular_rompimento_ema(
+                        df, ema_periodo, ema_stop_pct, ema_alvo_mult, max_wins, max_losses, banca_inicial, alavancagem
+                    )
+                else:
+                    trades, capital_final, bloq_derrota, bloq_vitoria = simular_escada(
+                        df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem
+                    )
+                mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria, max_losses, max_wins, tipo_estrategia)
+
+# ========================================================================= //
+# MODO LIVE/DEMO (BINANCE) - Apenas informativo
+# ========================================================================= //
+if modo == "Live/Demo (Tempo Real)":
+    st.subheader(f"🔴 Live/Demo - {symbol} | Estratégia: {tipo_estrategia}")
+    st.info("⚠️ O modo Live/Demo requer configuração adicional. Por enquanto, use o Backtest para validar as estratégias.")
+    
+    if api_key and secret_key:
+        st.success("✅ Chaves da API inseridas. O modo Live/Demo estará disponível em breve.")
+    else:
+        st.warning("Insira as chaves da API da Demo no menu lateral.")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Bot Multi-Estratégias v1.0")
