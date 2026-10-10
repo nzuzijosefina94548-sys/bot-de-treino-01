@@ -4,14 +4,12 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import yfinance as yf
-from binance.client import Client
-import time
 
 # ========================================================================= //
 # CONFIGURAÇÃO DA PÁGINA
 # ========================================================================= //
-st.set_page_config(page_title="Bot Escada Dinâmica", page_icon="🤖", layout="wide")
-st.title("🤖 Painel do Bot - Múltiplas Estratégias")
+st.set_page_config(page_title="Bot Multi-Ativos", page_icon="🤖", layout="wide")
+st.title("🤖 Painel do Bot - Multi-Ativos e Multi-Estratégias")
 
 # ========================================================================= //
 # MENU LATERAL (CONFIGURAÇÕES)
@@ -20,6 +18,92 @@ st.sidebar.header("⚙️ Configurações")
 
 modo = st.sidebar.selectbox("Modo de Operação", ["Backtest (Passado)", "Live/Demo (Tempo Real)"])
 
+# --- SELEÇÃO DE ATIVO ---
+st.sidebar.subheader("📈 Ativo")
+categoria = st.sidebar.selectbox(
+    "Categoria",
+    ["🪙 Criptomoedas", "🥇 Metais Preciosos", "💱 Forex", "📊 Índices", "🛢️ Commodities", "✏️ Personalizado"]
+)
+
+ATIVOS = {
+    "🪙 Criptomoedas": {
+        "BTC (Bitcoin)": "BTC-USD",
+        "ETH (Ethereum)": "ETH-USD",
+        "BNB (Binance Coin)": "BNB-USD",
+        "SOL (Solana)": "SOL-USD",
+        "XRP (Ripple)": "XRP-USD",
+        "ADA (Cardano)": "ADA-USD",
+        "DOGE (Dogecoin)": "DOGE-USD",
+        "AVAX (Avalanche)": "AVAX-USD",
+        "DOT (Polkadot)": "DOT-USD",
+        "MATIC (Polygon)": "MATIC-USD",
+        "LINK (Chainlink)": "LINK-USD",
+        "LTC (Litecoin)": "LTC-USD",
+        "BCH (Bitcoin Cash)": "BCH-USD",
+        "TRX (Tron)": "TRX-USD",
+        "SHIB (Shiba Inu)": "SHIB-USD",
+    },
+    "🥇 Metais Preciosos": {
+        "XAU (Ouro Futuros)": "GC=F",
+        "XAG (Prata Futuros)": "SI=F",
+        "Platina": "PL=F",
+        "Paládio": "PA=F",
+        "Ouro Spot (XAU/USD)": "XAUUSD=X",
+        "Prata Spot (XAG/USD)": "XAGUSD=X",
+    },
+    "💱 Forex": {
+        "EUR/USD": "EURUSD=X",
+        "GBP/USD": "GBPUSD=X",
+        "USD/JPY": "JPY=X",
+        "AUD/USD": "AUDUSD=X",
+        "USD/CAD": "CAD=X",
+        "USD/CHF": "CHF=X",
+        "NZD/USD": "NZDUSD=X",
+        "EUR/GBP": "EURGBP=X",
+        "EUR/JPY": "EURJPY=X",
+        "GBP/JPY": "GBPJPY=X",
+        "USD/BRL": "BRL=X",
+        "USD/ZAR": "ZAR=X",
+    },
+    "📊 Índices": {
+        "S&P 500": "^GSPC",
+        "Nasdaq": "^IXIC",
+        "Dow Jones": "^DJI",
+        "DAX (Alemanha)": "^GDAXI",
+        "FTSE 100 (UK)": "^FTSE",
+        "Nikkei 225 (Japão)": "^N225",
+        "IBOVESPA (Brasil)": "^BVSP",
+    },
+    "🛢️ Commodities": {
+        "Petróleo WTI": "CL=F",
+        "Petróleo Brent": "BZ=F",
+        "Gás Natural": "NG=F",
+        "Cobre": "HG=F",
+        "Trigo": "ZW=F",
+        "Milho": "ZC=F",
+        "Café": "KC=F",
+        "Açúcar": "SB=F",
+    },
+}
+
+if categoria == "✏️ Personalizado":
+    ticker = st.sidebar.text_input("Digite o ticker (Yahoo Finance)", "BTC-USD")
+    nome_ativo = ticker
+else:
+    ativos_cat = ATIVOS[categoria]
+    nome_ativo = st.sidebar.selectbox("Escolha o ativo", list(ativos_cat.keys()))
+    ticker = ativos_cat[nome_ativo]
+
+st.sidebar.caption(f"📌 Ticker: `{ticker}`")
+
+# --- TIMEFRAME ---
+timeframe = st.sidebar.selectbox(
+    "Timeframe",
+    ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1s", "1M", "3M", "1A"],
+    index=4
+)
+
+# --- BANCA E RISCO ---
 st.sidebar.subheader("💰 Banca e Risco")
 banca_inicial = st.sidebar.number_input("Banca Inicial (USDT)", min_value=10.0, max_value=1000000.0, value=1000.0, step=100.0)
 usar_alavancagem = st.sidebar.checkbox("Usar Alavancagem?", value=False)
@@ -28,19 +112,10 @@ if usar_alavancagem:
 else:
     alavancagem = 1
 
-# --- TAXA DA CORRETORA (SEMPRE VISÍVEL) ---
+# --- TAXA DA CORRETORA ---
 fee = st.sidebar.number_input("Taxa da Corretora (%)", min_value=0.0, max_value=2.0, value=0.10, step=0.01) / 100
 
-st.sidebar.subheader("Parâmetros da Estratégia")
-symbol = st.sidebar.text_input("Par (ex: BTCUSDT)", "BTCUSDT")
-
-timeframe = st.sidebar.selectbox(
-    "Timeframe",
-    ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1s", "1M", "3M", "1A"],
-    index=4
-)
-
-# --- SELETOR DE ESTRATÉGIA (4 OPÇÕES) ---
+# --- SELETOR DE ESTRATÉGIA ---
 st.sidebar.subheader("🎯 Estratégia")
 tipo_estrategia = st.sidebar.radio(
     "Escolha a estratégia:",
@@ -75,12 +150,19 @@ if modo == "Live/Demo (Tempo Real)":
     secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# FUNÇÕES DO BOT
+# FUNÇÃO: BAIXAR DADOS (MULTI-ATIVO)
 # ========================================================================= //
 @st.cache_data(ttl=300)
-def baixar_dados_yahoo(symbol, timeframe, start_str, end_str):
+def baixar_dados_yahoo(ticker, timeframe, start_str, end_str):
+    """
+    Baixa dados do Yahoo Finance para qualquer ticker:
+    - Cripto: BTC-USD, ETH-USD, ...
+    - Metais: GC=F, SI=F, XAUUSD=X, ...
+    - Forex: EURUSD=X, GBPUSD=X, ...
+    - Índices: ^GSPC, ^IXIC, ...
+    - Commodities: CL=F, NG=F, ...
+    """
     try:
-        ticker = symbol.replace("USDT", "-USD")
         yf_interval = timeframe
         if timeframe == "2h": yf_interval = "1h"
         elif timeframe == "4h": yf_interval = "1h"
@@ -91,30 +173,30 @@ def baixar_dados_yahoo(symbol, timeframe, start_str, end_str):
         elif timeframe == "1s": yf_interval = "1wk"
         elif timeframe == "1M": yf_interval = "1mo"
         elif timeframe == "3M": yf_interval = "3mo"
-        
+
         df = yf.download(ticker, start=start_str, end=end_str, interval=yf_interval, progress=False)
-        
+
         if df.empty:
-            st.warning(f"Não foi possível baixar os dados para o timeframe {timeframe}.")
+            st.warning(f"Não foi possível baixar dados para {ticker} no timeframe {timeframe}.")
             return pd.DataFrame()
-            
+
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
+
         df.reset_index(inplace=True)
-        df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'}, inplace=True)
-        
+        df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp',
+                            'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'}, inplace=True)
+
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df['open'] = pd.to_numeric(df['open'], errors='coerce')
         df['high'] = pd.to_numeric(df['high'], errors='coerce')
         df['low'] = pd.to_numeric(df['low'], errors='coerce')
         df['close'] = pd.to_numeric(df['close'], errors='coerce')
-        
+
         df.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
-        
         return df
     except Exception as e:
-        st.error(f"Erro ao baixar dados: {e}")
+        st.error(f"Erro ao baixar dados de {ticker}: {e}")
         return pd.DataFrame()
 
 # ========================================================================= //
@@ -132,7 +214,7 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
     losses = 0
     blocked = False
     horario_entrada = None
-    
+
     perda_total_anterior = 0.0
     bloqueios_por_derrota = 0
     bloqueios_por_vitoria = 0
@@ -173,7 +255,6 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
         elif direction == 1:
             if low <= sl:
                 pnl_pct = ((sl - entry_price) / entry_price) * 100
-                # P&L já inclui a taxa (o stop inclui step + fee)
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 perda_total_anterior = abs(pnl_pct / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
@@ -183,7 +264,7 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
                 direction = -1
                 ref_price = sl
                 entry_price = sl
-                
+
                 if tipo_estrategia == "Normal (Alvo Fixo)":
                     fator_alvo = step + fee
                 elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
@@ -193,7 +274,7 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
                 tp = entry_price * (1 - fator_alvo)
                 sl = entry_price * (1 + step + fee)
                 horario_entrada = ts
-                
+
             elif high >= tp:
                 pnl_pct = ((tp - entry_price) / entry_price) * 100
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
@@ -221,7 +302,7 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
                 direction = 1
                 ref_price = sl
                 entry_price = sl
-                
+
                 if tipo_estrategia == "Normal (Alvo Fixo)":
                     fator_alvo = step + fee
                 elif tipo_estrategia == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
@@ -231,7 +312,7 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
                 tp = entry_price * (1 + fator_alvo)
                 sl = entry_price * (1 - step - fee)
                 horario_entrada = ts
-                
+
             elif low <= tp:
                 pnl_pct = ((entry_price - tp) / entry_price) * 100
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
@@ -250,15 +331,15 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
         if losses >= max_losses:
             blocked = True
             bloqueios_por_derrota += 1
-            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
                             "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
             wins = 0
             losses = 0
-            
+
         if wins >= max_wins:
             blocked = True
             bloqueios_por_vitoria += 1
-            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
                             "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
             wins = 0
             losses = 0
@@ -266,22 +347,20 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
     return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
 
 # ========================================================================= //
-# ESTRATÉGIA 4 - ROMPIMENTO EMA (COM TAXA E ALAVANCAGEM)
+# ESTRATÉGIA 4 - ROMPIMENTO EMA
 # ========================================================================= //
 def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, max_losses, banca_inicial, alavancagem):
     trades = []
     capital = banca_inicial
-    
-    # Calcular a EMA
+
     df = df.copy()
     df['ema'] = df['close'].ewm(span=ema_periodo, adjust=False).mean()
-    
-    # Estado do alerta
+
     alerta_compra = False
     alerta_venda = False
     maxima_vela_alerta = None
     minima_vela_alerta = None
-    
+
     direcao = 0
     entry_price = None
     tp = None
@@ -292,14 +371,13 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
     horario_entrada = None
     bloqueios_por_derrota = 0
     bloqueios_por_vitoria = 0
-    
-    # Alvo em % (stop * multiplicador)
+
     alvo_pct = stop_pct * alvo_mult
 
     for i, row in df.iterrows():
         if i == 0:
             continue
-        
+
         high, low, close, ts, ema = row['high'], row['low'], row['close'], row['timestamp'], row['ema']
         prev_close = df['close'].iloc[i-1]
         prev_ema = df['ema'].iloc[i-1]
@@ -307,7 +385,6 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
         if blocked:
             continue
 
-        # --- DETECÇÃO DE CRUZAMENTO ---
         if prev_close <= prev_ema and close > ema:
             alerta_compra = True
             alerta_venda = False
@@ -317,7 +394,6 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
             alerta_compra = False
             minima_vela_alerta = low
 
-        # --- ENTRADAS (SE NÃO TIVER POSIÇÃO) ---
         if direcao == 0:
             if alerta_compra and maxima_vela_alerta and high > maxima_vela_alerta:
                 direcao = 1
@@ -334,12 +410,9 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
                 horario_entrada = ts
                 alerta_venda = False
 
-        # --- GESTÃO DE POSIÇÃO LONG ---
         elif direcao == 1:
             if low <= sl:
-                # P&L bruto (movimento do preço)
                 pnl_bruto = ((sl - entry_price) / entry_price) * 100
-                # P&L líquido = bruto - taxa (ida e volta = 2x fee, mas uma já está no movimento)
                 pnl_pct = pnl_bruto - (fee * 100)
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
@@ -357,7 +430,6 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
                 losses = 0
                 direcao = 0
 
-        # --- GESTÃO DE POSIÇÃO SHORT ---
         elif direcao == -1:
             if high >= sl:
                 pnl_bruto = ((entry_price - sl) / entry_price) * 100
@@ -378,18 +450,17 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
                 losses = 0
                 direcao = 0
 
-        # --- BLOQUEIOS ---
         if losses >= max_losses:
             blocked = True
             bloqueios_por_derrota += 1
-            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
                             "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
             wins = 0
             losses = 0
         if wins >= max_wins:
             blocked = True
             bloqueios_por_vitoria += 1
-            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0, 
+            trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
                             "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": capital})
             wins = 0
             losses = 0
@@ -402,7 +473,7 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
 def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria, max_losses, max_wins, tipo_estrategia):
     if trades:
         df_trades = pd.DataFrame(trades)
-        
+
         if bloq_derrota > 0 or bloq_vitoria > 0:
             st.markdown("---")
             col_aviso1, col_aviso2 = st.columns(2)
@@ -410,13 +481,13 @@ def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, b
                 col_aviso1.error(f"🚨 **BLOQUEIO POR DERROTAS:** O bot foi bloqueado **{bloq_derrota}** vez(es) por atingir o limite de {max_losses} derrotas seguidas.")
             else:
                 col_aviso1.success("✅ Nenhum bloqueio por derrotas.")
-                
+
             if bloq_vitoria > 0:
                 col_aviso2.success(f"🎉 **BLOQUEIO POR VITÓRIAS:** O bot foi bloqueado **{bloq_vitoria}** vez(es) por atingir a meta de {max_wins} vitórias seguidas.")
             else:
                 col_aviso2.info("ℹ️ Nenhum bloqueio por vitórias.")
             st.markdown("---")
-        
+
         df_normal = df_trades[df_trades['Resultado'] != 'BLOQUEIO']
         total_trades = len(df_normal)
         vitorias = len(df_normal[df_normal['Resultado'] == 'Alvo'])
@@ -444,13 +515,13 @@ def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, b
         fig_price = go.Figure(data=[go.Candlestick(x=df['timestamp'], open=df['open'],
                                                     high=df['high'], low=df['low'],
                                                     close=df['close'], name='Preço')])
-        
+
         if tipo_estrategia == "Rompimento EMA":
             df_plot = df.copy()
             df_plot['ema'] = df_plot['close'].ewm(span=ema_periodo, adjust=False).mean()
             fig_price.add_trace(go.Scatter(x=df_plot['timestamp'], y=df_plot['ema'],
                                             mode='lines', name='EMA', line=dict(color='yellow', width=2)))
-        
+
         longs = df_normal[df_normal['Direção'] == 'Long']
         shorts = df_normal[df_normal['Direção'] == 'Short']
         fig_price.add_trace(go.Scatter(x=longs['Data'], y=longs['Entrada'], mode='markers',
@@ -470,11 +541,12 @@ def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, b
 # ========================================================================= //
 if modo == "Backtest (Passado)":
     fee_display = fee * 100
-    st.subheader(f"📊 Backtest {symbol} | Timeframe: {timeframe} | Estratégia: {tipo_estrategia} | Banca: ${banca_inicial} | Alavancagem: {alavancagem}x | Taxa: {fee_display:.2f}%")
+    st.subheader(f"📊 Backtest {nome_ativo} ({ticker}) | Timeframe: {timeframe} | Estratégia: {tipo_estrategia}")
+    st.caption(f"💰 Banca: ${banca_inicial} | ⚡ Alavancagem: {alavancagem}x | 💸 Taxa: {fee_display:.2f}%")
 
     if st.button("🚀 Rodar Backtest (Yahoo Finance)", type="primary"):
-        with st.spinner("Baixando dados do Yahoo Finance e simulando..."):
-            df = baixar_dados_yahoo(symbol, timeframe, str(data_inicio), str(data_fim))
+        with st.spinner(f"Baixando dados de {ticker}..."):
+            df = baixar_dados_yahoo(ticker, timeframe, str(data_inicio), str(data_fim))
             if not df.empty:
                 if tipo_estrategia == "Rompimento EMA":
                     trades, capital_final, bloq_derrota, bloq_vitoria = simular_rompimento_ema(
@@ -490,13 +562,13 @@ if modo == "Backtest (Passado)":
 # MODO LIVE/DEMO (BINANCE) - Apenas informativo
 # ========================================================================= //
 if modo == "Live/Demo (Tempo Real)":
-    st.subheader(f"🔴 Live/Demo - {symbol} | Estratégia: {tipo_estrategia}")
+    st.subheader(f"🔴 Live/Demo - {nome_ativo} | Estratégia: {tipo_estrategia}")
     st.info("⚠️ O modo Live/Demo requer configuração adicional. Por enquanto, use o Backtest para validar as estratégias.")
-    
+
     if api_key and secret_key:
         st.success("✅ Chaves da API inseridas. O modo Live/Demo estará disponível em breve.")
     else:
         st.warning("Insira as chaves da API da Demo no menu lateral.")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Bot Multi-Estratégias v1.0")
+st.sidebar.caption("Bot Multi-Ativos v2.0")
