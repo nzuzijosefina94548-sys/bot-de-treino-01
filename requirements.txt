@@ -1,8 +1,5 @@
 streamlit
 yfinance
-python-binance
 pandas
 plotly
 numpy
-websockets
-flask
