@@ -18,7 +18,9 @@ st.sidebar.header("⚙️ Configurações")
 
 modo = st.sidebar.selectbox("Modo de Operação", ["Backtest (Passado)", "Live/Demo (Tempo Real)"])
 
-# --- SELEÇÃO DE ATIVO ---
+# ========================================================================= //
+# SELEÇÃO DE ATIVO (NOVO)
+# ========================================================================= //
 st.sidebar.subheader("📈 Ativo")
 categoria = st.sidebar.selectbox(
     "Categoria",
@@ -96,14 +98,9 @@ else:
 
 st.sidebar.caption(f"📌 Ticker: `{ticker}`")
 
-# --- TIMEFRAME ---
-timeframe = st.sidebar.selectbox(
-    "Timeframe",
-    ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1s", "1M", "3M", "1A"],
-    index=4
-)
-
-# --- BANCA E RISCO ---
+# ========================================================================= //
+# BANCA E RISCO (MANTIDO)
+# ========================================================================= //
 st.sidebar.subheader("💰 Banca e Risco")
 banca_inicial = st.sidebar.number_input("Banca Inicial (USDT)", min_value=10.0, max_value=1000000.0, value=1000.0, step=100.0)
 usar_alavancagem = st.sidebar.checkbox("Usar Alavancagem?", value=False)
@@ -112,10 +109,21 @@ if usar_alavancagem:
 else:
     alavancagem = 1
 
-# --- TAXA DA CORRETORA ---
+# --- TAXA DA CORRETORA (SEMPRE VISÍVEL) ---
 fee = st.sidebar.number_input("Taxa da Corretora (%)", min_value=0.0, max_value=2.0, value=0.10, step=0.01) / 100
 
-# --- SELETOR DE ESTRATÉGIA ---
+# ========================================================================= //
+# TIMEFRAME (MANTIDO)
+# ========================================================================= //
+timeframe = st.sidebar.selectbox(
+    "Timeframe",
+    ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1s", "1M", "3M", "1A"],
+    index=4
+)
+
+# ========================================================================= //
+# SELETOR DE ESTRATÉGIA (MANTIDO)
+# ========================================================================= //
 st.sidebar.subheader("🎯 Estratégia")
 tipo_estrategia = st.sidebar.radio(
     "Escolha a estratégia:",
@@ -127,7 +135,9 @@ tipo_estrategia = st.sidebar.radio(
     ]
 )
 
-# --- PARÂMETROS ESPECÍFICOS DE CADA ESTRATÉGIA ---
+# ========================================================================= //
+# PARÂMETROS ESPECÍFICOS DE CADA ESTRATÉGIA (MANTIDO)
+# ========================================================================= //
 if tipo_estrategia == "Rompimento EMA":
     st.sidebar.subheader("📊 Parâmetros EMA")
     ema_periodo = st.sidebar.number_input("Período da EMA", min_value=2, max_value=500, value=21)
@@ -136,32 +146,33 @@ if tipo_estrategia == "Rompimento EMA":
 else:
     step = st.sidebar.number_input("Lucro Desejado (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1) / 100
 
+# ========================================================================= //
+# LIMITES DE SEGURANÇA (MANTIDO)
+# ========================================================================= //
 max_wins = st.sidebar.number_input("Máx. Vitórias Seguidas", min_value=1, max_value=50, value=20)
 max_losses = st.sidebar.number_input("Máx. Derrotas Seguidas", min_value=1, max_value=50, value=10)
 
+# ========================================================================= //
+# PERÍODO DO BACKTEST (MANTIDO)
+# ========================================================================= //
 if modo == "Backtest (Passado)":
     st.sidebar.subheader("Período do Backtest")
     data_inicio = st.sidebar.date_input("Data de Início", datetime.now() - timedelta(days=30))
     data_fim = st.sidebar.date_input("Data de Fim", datetime.now())
 
+# ========================================================================= //
+# CREDENCIAIS DEMO (MANTIDO)
+# ========================================================================= //
 if modo == "Live/Demo (Tempo Real)":
     st.sidebar.subheader("Credenciais da Demo (Binance)")
     api_key = st.sidebar.text_input("API Key", type="password")
     secret_key = st.sidebar.text_input("Secret Key", type="password")
 
 # ========================================================================= //
-# FUNÇÃO: BAIXAR DADOS (MULTI-ATIVO)
+# FUNÇÃO: BAIXAR DADOS (ATUALIZADA PARA MULTI-ATIVO)
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados_yahoo(ticker, timeframe, start_str, end_str):
-    """
-    Baixa dados do Yahoo Finance para qualquer ticker:
-    - Cripto: BTC-USD, ETH-USD, ...
-    - Metais: GC=F, SI=F, XAUUSD=X, ...
-    - Forex: EURUSD=X, GBPUSD=X, ...
-    - Índices: ^GSPC, ^IXIC, ...
-    - Commodities: CL=F, NG=F, ...
-    """
     try:
         yf_interval = timeframe
         if timeframe == "2h": yf_interval = "1h"
@@ -200,7 +211,7 @@ def baixar_dados_yahoo(ticker, timeframe, start_str, end_str):
         return pd.DataFrame()
 
 # ========================================================================= //
-# ESTRATÉGIA 1, 2, 3 - ESCADA DINÂMICA
+# ESTRATÉGIA 1, 2, 3 - ESCADA DINÂMICA (INALTERADO)
 # ========================================================================= //
 def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_inicial, alavancagem):
     trades = []
@@ -347,7 +358,7 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
     return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
 
 # ========================================================================= //
-# ESTRATÉGIA 4 - ROMPIMENTO EMA
+# ESTRATÉGIA 4 - ROMPIMENTO EMA (INALTERADO)
 # ========================================================================= //
 def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, max_losses, banca_inicial, alavancagem):
     trades = []
@@ -468,7 +479,7 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, 
     return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
 
 # ========================================================================= //
-# MOSTRAR RESULTADOS
+# MOSTRAR RESULTADOS (INALTERADO)
 # ========================================================================= //
 def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria, max_losses, max_wins, tipo_estrategia):
     if trades:
@@ -537,12 +548,11 @@ def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, b
         st.warning("Nenhum trade foi gerado no período.")
 
 # ========================================================================= //
-# MODO BACKTEST
+# MODO BACKTEST (INALTERADO)
 # ========================================================================= //
 if modo == "Backtest (Passado)":
     fee_display = fee * 100
-    st.subheader(f"📊 Backtest {nome_ativo} ({ticker}) | Timeframe: {timeframe} | Estratégia: {tipo_estrategia}")
-    st.caption(f"💰 Banca: ${banca_inicial} | ⚡ Alavancagem: {alavancagem}x | 💸 Taxa: {fee_display:.2f}%")
+    st.subheader(f"📊 Backtest {nome_ativo} | Timeframe: {timeframe} | Estratégia: {tipo_estrategia} | Banca: ${banca_inicial} | Alavancagem: {alavancagem}x | Taxa: {fee_display:.2f}%")
 
     if st.button("🚀 Rodar Backtest (Yahoo Finance)", type="primary"):
         with st.spinner(f"Baixando dados de {ticker}..."):
@@ -559,7 +569,7 @@ if modo == "Backtest (Passado)":
                 mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, bloq_vitoria, max_losses, max_wins, tipo_estrategia)
 
 # ========================================================================= //
-# MODO LIVE/DEMO (BINANCE) - Apenas informativo
+# MODO LIVE/DEMO (INALTERADO)
 # ========================================================================= //
 if modo == "Live/Demo (Tempo Real)":
     st.subheader(f"🔴 Live/Demo - {nome_ativo} | Estratégia: {tipo_estrategia}")
@@ -571,4 +581,4 @@ if modo == "Live/Demo (Tempo Real)":
         st.warning("Insira as chaves da API da Demo no menu lateral.")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Bot Multi-Ativos v2.0")
+st.sidebar.caption("Bot Multi-Ativos v2.1")
