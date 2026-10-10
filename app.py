@@ -28,6 +28,9 @@ if usar_alavancagem:
 else:
     alavancagem = 1
 
+# --- TAXA DA CORRETORA (SEMPRE VISÍVEL) ---
+fee = st.sidebar.number_input("Taxa da Corretora (%)", min_value=0.0, max_value=2.0, value=0.10, step=0.01) / 100
+
 st.sidebar.subheader("Parâmetros da Estratégia")
 symbol = st.sidebar.text_input("Par (ex: BTCUSDT)", "BTCUSDT")
 
@@ -37,7 +40,7 @@ timeframe = st.sidebar.selectbox(
     index=4
 )
 
-# --- SELETOR DE ESTRATÉGIA (4 OPÇÕES AGORA) ---
+# --- SELETOR DE ESTRATÉGIA (4 OPÇÕES) ---
 st.sidebar.subheader("🎯 Estratégia")
 tipo_estrategia = st.sidebar.radio(
     "Escolha a estratégia:",
@@ -52,15 +55,14 @@ tipo_estrategia = st.sidebar.radio(
 # --- PARÂMETROS ESPECÍFICOS DE CADA ESTRATÉGIA ---
 if tipo_estrategia == "Rompimento EMA":
     st.sidebar.subheader("📊 Parâmetros EMA")
-    ema_periodo = st.sidebar.number_input("Período da EMA", min_value=2, max_value=500, value=30)
-    ema_stop_pct = st.sidebar.number_input("Stop Loss (%)", min_value=0.01, max_value=10.0, value=0.15, step=0.01) / 100
-    ema_alvo_mult = st.sidebar.number_input("Multiplicador do Alvo (x Stop)", min_value=0.5, max_value=50.0, value=8.0, step=0.5)
+    ema_periodo = st.sidebar.number_input("Período da EMA", min_value=2, max_value=500, value=21)
+    ema_stop_pct = st.sidebar.number_input("Stop Loss (%)", min_value=0.01, max_value=10.0, value=1.0, step=0.1) / 100
+    ema_alvo_mult = st.sidebar.number_input("Multiplicador do Alvo (x Stop)", min_value=0.5, max_value=50.0, value=0.9, step=0.1)
 else:
     step = st.sidebar.number_input("Lucro Desejado (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1) / 100
-    fee = st.sidebar.number_input("Taxa da Corretora (%)", min_value=0.01, max_value=1.0, value=0.10, step=0.01) / 100
 
-max_wins = st.sidebar.number_input("Máx. Vitórias Seguidas", min_value=1, max_value=50, value=3)
-max_losses = st.sidebar.number_input("Máx. Derrotas Seguidas", min_value=1, max_value=50, value=3)
+max_wins = st.sidebar.number_input("Máx. Vitórias Seguidas", min_value=1, max_value=50, value=20)
+max_losses = st.sidebar.number_input("Máx. Derrotas Seguidas", min_value=1, max_value=50, value=10)
 
 if modo == "Backtest (Passado)":
     st.sidebar.subheader("Período do Backtest")
@@ -171,8 +173,9 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
         elif direction == 1:
             if low <= sl:
                 pnl_pct = ((sl - entry_price) / entry_price) * 100
+                # P&L já inclui a taxa (o stop inclui step + fee)
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
-                perda_total_anterior = abs(pnl_pct / 100) + fee
+                perda_total_anterior = abs(pnl_pct / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
                                 "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
                 losses += 1
@@ -210,7 +213,7 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
             if high >= sl:
                 pnl_pct = ((entry_price - sl) / entry_price) * 100
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
-                perda_total_anterior = abs(pnl_pct / 100) + fee
+                perda_total_anterior = abs(pnl_pct / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
                                 "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
                 losses += 1
@@ -263,9 +266,9 @@ def simular_escada(df, step, fee, max_wins, max_losses, tipo_estrategia, banca_i
     return trades, capital, bloqueios_por_derrota, bloqueios_por_vitoria
 
 # ========================================================================= //
-# ESTRATÉGIA 4 - ROMPIMENTO EMA
+# ESTRATÉGIA 4 - ROMPIMENTO EMA (COM TAXA E ALAVANCAGEM)
 # ========================================================================= //
-def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_losses, banca_inicial, alavancagem):
+def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, fee, max_wins, max_losses, banca_inicial, alavancagem):
     trades = []
     capital = banca_inicial
     
@@ -290,6 +293,7 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_l
     bloqueios_por_derrota = 0
     bloqueios_por_vitoria = 0
     
+    # Alvo em % (stop * multiplicador)
     alvo_pct = stop_pct * alvo_mult
 
     for i, row in df.iterrows():
@@ -304,25 +308,25 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_l
             continue
 
         # --- DETECÇÃO DE CRUZAMENTO ---
-        if prev_close <= prev_ema and close > ema:  # Cruzamento para cima
+        if prev_close <= prev_ema and close > ema:
             alerta_compra = True
             alerta_venda = False
             maxima_vela_alerta = high
-        elif prev_close >= prev_ema and close < ema:  # Cruzamento para baixo
+        elif prev_close >= prev_ema and close < ema:
             alerta_venda = True
             alerta_compra = False
             minima_vela_alerta = low
 
         # --- ENTRADAS (SE NÃO TIVER POSIÇÃO) ---
         if direcao == 0:
-            if alerta_compra and high > maxima_vela_alerta:
+            if alerta_compra and maxima_vela_alerta and high > maxima_vela_alerta:
                 direcao = 1
                 entry_price = maxima_vela_alerta
                 sl = entry_price * (1 - stop_pct)
                 tp = entry_price * (1 + alvo_pct)
                 horario_entrada = ts
                 alerta_compra = False
-            elif alerta_venda and low < minima_vela_alerta:
+            elif alerta_venda and minima_vela_alerta and low < minima_vela_alerta:
                 direcao = -1
                 entry_price = minima_vela_alerta
                 sl = entry_price * (1 + stop_pct)
@@ -333,7 +337,10 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_l
         # --- GESTÃO DE POSIÇÃO LONG ---
         elif direcao == 1:
             if low <= sl:
-                pnl_pct = ((sl - entry_price) / entry_price) * 100
+                # P&L bruto (movimento do preço)
+                pnl_bruto = ((sl - entry_price) / entry_price) * 100
+                # P&L líquido = bruto - taxa (ida e volta = 2x fee, mas uma já está no movimento)
+                pnl_pct = pnl_bruto - (fee * 100)
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
                                 "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
@@ -341,7 +348,8 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_l
                 wins = 0
                 direcao = 0
             elif high >= tp:
-                pnl_pct = ((tp - entry_price) / entry_price) * 100
+                pnl_bruto = ((tp - entry_price) / entry_price) * 100
+                pnl_pct = pnl_bruto - (fee * 100)
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Long", "Entrada": entry_price,
                                 "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
@@ -352,7 +360,8 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_l
         # --- GESTÃO DE POSIÇÃO SHORT ---
         elif direcao == -1:
             if high >= sl:
-                pnl_pct = ((entry_price - sl) / entry_price) * 100
+                pnl_bruto = ((entry_price - sl) / entry_price) * 100
+                pnl_pct = pnl_bruto - (fee * 100)
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
                                 "Saída": sl, "Resultado": "Stop", "P&L (%)": pnl_pct, "Capital": capital})
@@ -360,7 +369,8 @@ def simular_rompimento_ema(df, ema_periodo, stop_pct, alvo_mult, max_wins, max_l
                 wins = 0
                 direcao = 0
             elif low <= tp:
-                pnl_pct = ((entry_price - tp) / entry_price) * 100
+                pnl_bruto = ((entry_price - tp) / entry_price) * 100
+                pnl_pct = pnl_bruto - (fee * 100)
                 capital *= (1 + (pnl_pct * alavancagem) / 100)
                 trades.append({"Data": horario_entrada, "Direção": "Short", "Entrada": entry_price,
                                 "Saída": tp, "Resultado": "Alvo", "P&L (%)": pnl_pct, "Capital": capital})
@@ -435,7 +445,6 @@ def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, b
                                                     high=df['high'], low=df['low'],
                                                     close=df['close'], name='Preço')])
         
-        # Adiciona a EMA ao gráfico se for a estratégia de Rompimento
         if tipo_estrategia == "Rompimento EMA":
             df_plot = df.copy()
             df_plot['ema'] = df_plot['close'].ewm(span=ema_periodo, adjust=False).mean()
@@ -460,7 +469,8 @@ def mostrar_resultados(df, trades, capital_final, banca_inicial, bloq_derrota, b
 # MODO BACKTEST
 # ========================================================================= //
 if modo == "Backtest (Passado)":
-    st.subheader(f"📊 Backtest {symbol} | Timeframe: {timeframe} | Estratégia: {tipo_estrategia} | Banca: ${banca_inicial} | Alavancagem: {alavancagem}x")
+    fee_display = fee * 100
+    st.subheader(f"📊 Backtest {symbol} | Timeframe: {timeframe} | Estratégia: {tipo_estrategia} | Banca: ${banca_inicial} | Alavancagem: {alavancagem}x | Taxa: {fee_display:.2f}%")
 
     if st.button("🚀 Rodar Backtest (Yahoo Finance)", type="primary"):
         with st.spinner("Baixando dados do Yahoo Finance e simulando..."):
@@ -468,7 +478,7 @@ if modo == "Backtest (Passado)":
             if not df.empty:
                 if tipo_estrategia == "Rompimento EMA":
                     trades, capital_final, bloq_derrota, bloq_vitoria = simular_rompimento_ema(
-                        df, ema_periodo, ema_stop_pct, ema_alvo_mult, max_wins, max_losses, banca_inicial, alavancagem
+                        df, ema_periodo, ema_stop_pct, ema_alvo_mult, fee, max_wins, max_losses, banca_inicial, alavancagem
                     )
                 else:
                     trades, capital_final, bloq_derrota, bloq_vitoria = simular_escada(
