@@ -18,40 +18,28 @@ st.sidebar.header("⚙️ Configurações")
 
 modo = st.sidebar.selectbox("Modo de Operação", ["Backtest (Passado)", "Live/Demo (Tempo Real)"])
 
-# ========================================================================= //
-# 1. ATIVO E TIMEFRAME
-# ========================================================================= //
+# --- ATIVO E TIMEFRAME ---
 st.sidebar.subheader("📊 Ativo e Timeframe")
-
-# Lista de criptos disponíveis + campo livre
-ativopredefinido = st.sidebar.selectbox(
-    "Ativo (escolha ou digite abaixo)",
+ativo_predef = st.sidebar.selectbox(
+    "Ativo",
     ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
      "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT", "LINKUSDT", "Outro"]
 )
-
-if ativopredefinido == "Outro":
-    symbol = st.sidebar.text_input("Digite o par (ex: LTCUSDT)", "LTCUSDT")
-else:
-    symbol = ativopredefinido
+symbol = st.sidebar.text_input("Ou digite o par", "LTCUSDT") if ativo_predef == "Outro" else ativo_predef
 
 timeframe = st.sidebar.selectbox(
     "Timeframe",
-    ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "3d", "1s", "1M", "3M", "1A"],
-    index=4
+    ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"],
+    index=1
 )
 
-# ========================================================================= //
-# 2. BANCA E RISCO
-# ========================================================================= //
+# --- BANCA E RISCO ---
 st.sidebar.subheader("💰 Banca e Risco")
 banca_inicial = st.sidebar.number_input("Banca Inicial (USDT)", min_value=10.0, max_value=1000000.0, value=1000.0, step=100.0)
 usar_alavancagem = st.sidebar.checkbox("Usar Alavancagem?", value=False)
 alavancagem = st.sidebar.slider("Alavancagem (x)", min_value=1, max_value=20, value=1, step=1) if usar_alavancagem else 1
 
-# ========================================================================= //
-# 3. ESCOLHA DA ESTRATÉGIA
-# ========================================================================= //
+# --- ESTRATÉGIA ---
 st.sidebar.subheader("🎯 Estratégia")
 tipo_estrategia = st.sidebar.radio(
     "Escolha a estratégia:",
@@ -63,59 +51,36 @@ tipo_estrategia = st.sidebar.radio(
     ]
 )
 
-# ========================================================================= //
-# 4. PARÂMETROS DE RISCO (SEMPRE VISÍVEIS)
-# ========================================================================= //
+# --- RISCO: STOP, ALVO, TAXA ---
 st.sidebar.subheader("📉 Stop Loss e Alvo")
+stop_loss_pct = st.sidebar.number_input("Stop Loss (%)", min_value=0.1, max_value=50.0, value=1.0, step=0.1) / 100
+alvo_pct = st.sidebar.number_input("Alvo / Lucro Desejado (%)", min_value=0.1, max_value=50.0, value=1.0, step=0.1) / 100
+fee = st.sidebar.number_input("Taxa da Corretora (%)", min_value=0.01, max_value=5.0, value=0.10, step=0.01) / 100
 
-stop_loss_pct = st.sidebar.number_input(
-    "Stop Loss (%)", min_value=0.1, max_value=50.0, value=1.0, step=0.1,
-    help="Percentagem de perda máxima por operação"
-) / 100
+# --- EMA ---
+st.sidebar.subheader("📈 Parâmetros EMA")
+ema_periodo = st.sidebar.number_input("Período da EMA", min_value=2, max_value=500, value=21)
 
-alvo_pct = st.sidebar.number_input(
-    "Alvo / Lucro Desejado (%)", min_value=0.1, max_value=50.0, value=1.0, step=0.1,
-    help="Percentagem de lucro por operação"
-) / 100
-
-fee = st.sidebar.number_input(
-    "Taxa da Corretora (%)", min_value=0.01, max_value=5.0, value=0.10, step=0.01,
-    help="Taxa total (abertura + fecho)"
-) / 100
-
-# ========================================================================= //
-# 5. PARÂMETROS ESPECÍFICOS DA EMA (SEMPRE VISÍVEIS)
-# ========================================================================= //
-st.sidebar.subheader("📈 Parâmetros EMA (Rompimento EMA)")
-ema_periodo = st.sidebar.number_input(
-    "Período da EMA", min_value=2, max_value=500, value=21,
-    help="Média Móvel Exponencial usada para detetar tendência"
-)
-
-# ========================================================================= //
-# 6. LIMITES DE SEGURANÇA
-# ========================================================================= //
+# --- LIMITES ---
 st.sidebar.subheader("🔒 Limites de Segurança")
-max_wins = st.sidebar.number_input("Máx. Vitórias Seguidas", min_value=1, max_value=50, value=20)
-max_losses = st.sidebar.number_input("Máx. Derrotas Seguidas", min_value=1, max_value=50, value=10)
+max_wins = st.sidebar.number_input("Máx. Vitórias Seguidas", min_value=1, max_value=50, value=5)
+max_losses = st.sidebar.number_input("Máx. Derrotas Seguidas", min_value=1, max_value=50, value=5)
+horas_bloqueio = st.sidebar.number_input("Horas de Bloqueio após Limite", min_value=1, max_value=168, value=24)
 
-# ========================================================================= //
-# 7. PERÍODO DO BACKTEST
-# ========================================================================= //
+# --- PERÍODO ---
 if modo == "Backtest (Passado)":
     st.sidebar.subheader("📅 Período do Backtest")
     data_inicio = st.sidebar.date_input("Data de Início", datetime.now() - timedelta(days=30))
     data_fim = st.sidebar.date_input("Data de Fim", datetime.now())
 
 # ========================================================================= //
-# FUNÇÃO: BAIXAR DADOS
+# BAIXAR DADOS
 # ========================================================================= //
 @st.cache_data(ttl=300)
 def baixar_dados_yahoo(symbol, timeframe, start_str, end_str):
     try:
         ticker = symbol.replace("USDT", "-USD")
-        yf_int = {"2h": "1h", "4h": "1h", "6h": "1h", "12h": "1h",
-                  "3d": "1d", "1A": "1mo", "1s": "1wk", "1M": "1mo", "3M": "3mo"}.get(timeframe, timeframe)
+        yf_int = {"2h": "1h", "4h": "1h", "6h": "1h", "12h": "1h"}.get(timeframe, timeframe)
         df = yf.download(ticker, start=start_str, end=end_str, interval=yf_int, progress=False)
         if df.empty:
             return pd.DataFrame()
@@ -130,13 +95,19 @@ def baixar_dados_yahoo(symbol, timeframe, start_str, end_str):
         df.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
         return df
     except Exception as e:
-        st.error(f"Erro ao baixar dados: {e}")
+        st.error(f"Erro: {e}")
         return pd.DataFrame()
 
 # ========================================================================= //
-# ESTRATÉGIAS 1, 2, 3 - ESCADA DINÂMICA (com stop e alvo separados)
+# ESTRATÉGIAS 1, 2, 3 - ESCADA DINÂMICA CORRIGIDA
 # ========================================================================= //
-def simular_escada(df, stop_pct, alvo_pct, fee, max_wins, max_losses, tipo_est, banca, alav):
+def simular_escada(df, stop_pct, alvo_pct, fee, max_wins, max_losses, horas_bloqueio, tipo_est, banca, alav):
+    """
+    Lógica corrigida:
+    - Gatilho de entrada: preço move X% (usa o ALVO como referência de movimento mínimo)
+    - Depois de entrar: alvo = alvo_pct + fee, stop = stop_pct + fee
+    - Após bloqueio: espera N horas antes de retomar
+    """
     trades = []
     cap = banca
     ref = df['close'].iloc[0]
@@ -144,14 +115,29 @@ def simular_escada(df, stop_pct, alvo_pct, fee, max_wins, max_losses, tipo_est, 
     w = 0; l = 0; blk = False; he = None
     pa = 0.0
     bd = 0; bv = 0
+    horario_bloqueio = None
+
+    # O gatilho de entrada usa o ALVO como referência (1% = alvo padrão)
+    gatilho = alvo_pct
 
     for i, row in df.iterrows():
         h, l, c, ts = row['high'], row['low'], row['close'], row['timestamp']
+
+        # Verifica se deve desbloquear
         if blk:
-            continue
+            if horario_bloqueio and (ts - horario_bloqueio) >= pd.Timedelta(hours=horas_bloqueio):
+                blk = False
+                w = 0
+                l = 0
+                pa = 0.0
+                ref = c
+                trades.append({"Data": ts, "Direção": "DESBLOQUEIO", "Entrada": 0, "Saída": 0,
+                                "Resultado": "RETOMA", "P&L (%)": 0, "Capital": cap})
+            else:
+                continue
 
         if d == 0:
-            # Fator do alvo com base na estratégia
+            # Fator do alvo
             if tipo_est == "Normal (Alvo Fixo)":
                 f = alvo_pct + fee
             elif tipo_est == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
@@ -159,71 +145,100 @@ def simular_escada(df, stop_pct, alvo_pct, fee, max_wins, max_losses, tipo_est, 
             else:
                 f = (pa + fee + fee) if pa > 0 else (alvo_pct + fee)
 
-            # Gatilho de entrada
-            if h >= ref * (1 + stop_pct):
-                d = 1; ep = ref * (1 + stop_pct); tp = ep * (1 + f); sl = ep * (1 - stop_pct - fee); he = ts
-            elif l <= ref * (1 - stop_pct):
-                d = -1; ep = ref * (1 - stop_pct); tp = ep * (1 - f); sl = ep * (1 + stop_pct + fee); he = ts
+            # Gatilho de entrada: preço move gatilho% (usa alvo como referência)
+            if h >= ref * (1 + gatilho):
+                d = 1
+                ep = ref * (1 + gatilho)
+                tp = ep * (1 + f)
+                sl = ep * (1 - stop_pct - fee)
+                he = ts
+            elif l <= ref * (1 - gatilho):
+                d = -1
+                ep = ref * (1 - gatilho)
+                tp = ep * (1 - f)
+                sl = ep * (1 + stop_pct + fee)
+                he = ts
 
         elif d == 1:
             if l <= sl:
                 p = ((sl - ep) / ep) * 100
                 cap *= (1 + (p * alav) / 100)
                 pa = abs(p / 100) + fee
-                trades.append({"Data": he, "Direção": "Long", "Entrada": ep, "Saída": sl,
-                                "Resultado": "Stop", "P&L (%)": p, "Capital": cap})
-                l += 1; w = 0; d = -1; ref = sl; ep = sl
+                trades.append({"Data": he, "Direção": "Long", "Entrada": round(ep, 2), "Saída": round(sl, 2),
+                                "Resultado": "Stop", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
+                l += 1; w = 0; d = -1
+                ref = sl
+                ep = sl
                 if tipo_est == "Normal (Alvo Fixo)":
                     f = alvo_pct + fee
                 elif tipo_est == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
                     f = pa + fee + fee + alvo_pct
                 else:
                     f = pa + fee + fee
-                tp = ep * (1 - f); sl = ep * (1 + stop_pct + fee); he = ts
+                tp = ep * (1 - f)
+                sl = ep * (1 + stop_pct + fee)
+                he = ts
             elif h >= tp:
                 p = ((tp - ep) / ep) * 100
                 cap *= (1 + (p * alav) / 100)
                 pa = 0.0
-                trades.append({"Data": he, "Direção": "Long", "Entrada": ep, "Saída": tp,
-                                "Resultado": "Alvo", "P&L (%)": p, "Capital": cap})
-                w += 1; l = 0; ref = tp; ep = tp
+                trades.append({"Data": he, "Direção": "Long", "Entrada": round(ep, 2), "Saída": round(tp, 2),
+                                "Resultado": "Alvo", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
+                w += 1; l = 0
+                ref = tp
+                ep = tp
                 f = alvo_pct + fee
-                tp = ep * (1 + f); sl = ep * (1 - stop_pct - fee); he = ts
+                tp = ep * (1 + f)
+                sl = ep * (1 - stop_pct - fee)
+                he = ts
 
         elif d == -1:
             if h >= sl:
                 p = ((ep - sl) / ep) * 100
                 cap *= (1 + (p * alav) / 100)
                 pa = abs(p / 100) + fee
-                trades.append({"Data": he, "Direção": "Short", "Entrada": ep, "Saída": sl,
-                                "Resultado": "Stop", "P&L (%)": p, "Capital": cap})
-                l += 1; w = 0; d = 1; ref = sl; ep = sl
+                trades.append({"Data": he, "Direção": "Short", "Entrada": round(ep, 2), "Saída": round(sl, 2),
+                                "Resultado": "Stop", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
+                l += 1; w = 0; d = 1
+                ref = sl
+                ep = sl
                 if tipo_est == "Normal (Alvo Fixo)":
                     f = alvo_pct + fee
                 elif tipo_est == "Recuperação Cirúrgica (Perda Anterior + Taxas + Lucro)":
                     f = pa + fee + fee + alvo_pct
                 else:
                     f = pa + fee + fee
-                tp = ep * (1 + f); sl = ep * (1 - stop_pct - fee); he = ts
+                tp = ep * (1 - f)
+                sl = ep * (1 - stop_pct - fee)
+                he = ts
             elif l <= tp:
                 p = ((ep - tp) / ep) * 100
                 cap *= (1 + (p * alav) / 100)
                 pa = 0.0
-                trades.append({"Data": he, "Direção": "Short", "Entrada": ep, "Saída": tp,
-                                "Resultado": "Alvo", "P&L (%)": p, "Capital": cap})
-                w += 1; l = 0; ref = tp; ep = tp
+                trades.append({"Data": he, "Direção": "Short", "Entrada": round(ep, 2), "Saída": round(tp, 2),
+                                "Resultado": "Alvo", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
+                w += 1; l = 0
+                ref = tp
+                ep = tp
                 f = alvo_pct + fee
-                tp = ep * (1 - f); sl = ep * (1 + stop_pct + fee); he = ts
+                tp = ep * (1 - f)
+                sl = ep * (1 + stop_pct + fee)
+                he = ts
 
+        # Verificação de limites
         if l >= max_losses:
-            blk = True; bd += 1
+            blk = True
+            bd += 1
+            horario_bloqueio = ts
             trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
-                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": cap})
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": round(cap, 2)})
             w = 0; l = 0
-        if w >= max_wins:
-            blk = True; bv += 1
+        elif w >= max_wins:
+            blk = True
+            bv += 1
+            horario_bloqueio = ts
             trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
-                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": cap})
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": round(cap, 2)})
             w = 0; l = 0
 
     return trades, cap, bd, bv
@@ -231,7 +246,7 @@ def simular_escada(df, stop_pct, alvo_pct, fee, max_wins, max_losses, tipo_est, 
 # ========================================================================= //
 # ESTRATÉGIA 4 - ROMPIMENTO EMA
 # ========================================================================= //
-def simular_rompimento_ema(df, emp, stop_pct, alvo_pct, fee, mw, ml, banca, alav):
+def simular_rompimento_ema(df, emp, stop_pct, alvo_pct, fee, mw, ml, horas_bloqueio, banca, alav):
     trades = []
     cap = banca
     df = df.copy()
@@ -240,15 +255,20 @@ def simular_rompimento_ema(df, emp, stop_pct, alvo_pct, fee, mw, ml, banca, alav
     d = 0; ep = None; tp = None; sl = None
     w = 0; l = 0; blk = False; he = None
     bd = 0; bv = 0
+    horario_bloqueio = None
 
     for i, row in df.iterrows():
         if i == 0:
             continue
         h, l, c, ts, e = row['high'], row['low'], row['close'], row['timestamp'], row['ema']
-        pc = df['close'].iloc[i-1]; pe = df['ema'].iloc[i-1]
+        pc = df['close'].iloc[i-1]
+        pe = df['ema'].iloc[i-1]
 
         if blk:
-            continue
+            if horario_bloqueio and (ts - horario_bloqueio) >= pd.Timedelta(hours=horas_bloqueio):
+                blk = False; w = 0; l = 0
+            else:
+                continue
 
         if pc <= pe and c > e:
             ac = True; av = False; mx = h
@@ -264,38 +284,38 @@ def simular_rompimento_ema(df, emp, stop_pct, alvo_pct, fee, mw, ml, banca, alav
             if l <= sl:
                 p = ((sl - ep) / ep) * 100 - (fee * 100)
                 cap *= (1 + (p * alav) / 100)
-                trades.append({"Data": he, "Direção": "Long", "Entrada": ep, "Saída": sl,
-                                "Resultado": "Stop", "P&L (%)": p, "Capital": cap})
+                trades.append({"Data": he, "Direção": "Long", "Entrada": round(ep, 2), "Saída": round(sl, 2),
+                                "Resultado": "Stop", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
                 l += 1; w = 0; d = 0
             elif h >= tp:
                 p = ((tp - ep) / ep) * 100 - (fee * 100)
                 cap *= (1 + (p * alav) / 100)
-                trades.append({"Data": he, "Direção": "Long", "Entrada": ep, "Saída": tp,
-                                "Resultado": "Alvo", "P&L (%)": p, "Capital": cap})
+                trades.append({"Data": he, "Direção": "Long", "Entrada": round(ep, 2), "Saída": round(tp, 2),
+                                "Resultado": "Alvo", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
                 w += 1; l = 0; d = 0
         elif d == -1:
             if h >= sl:
                 p = ((ep - sl) / ep) * 100 - (fee * 100)
                 cap *= (1 + (p * alav) / 100)
-                trades.append({"Data": he, "Direção": "Short", "Entrada": ep, "Saída": sl,
-                                "Resultado": "Stop", "P&L (%)": p, "Capital": cap})
+                trades.append({"Data": he, "Direção": "Short", "Entrada": round(ep, 2), "Saída": round(sl, 2),
+                                "Resultado": "Stop", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
                 l += 1; w = 0; d = 0
             elif l <= tp:
                 p = ((ep - tp) / ep) * 100 - (fee * 100)
                 cap *= (1 + (p * alav) / 100)
-                trades.append({"Data": he, "Direção": "Short", "Entrada": ep, "Saída": tp,
-                                "Resultado": "Alvo", "P&L (%)": p, "Capital": cap})
+                trades.append({"Data": he, "Direção": "Short", "Entrada": round(ep, 2), "Saída": round(tp, 2),
+                                "Resultado": "Alvo", "P&L (%)": round(p, 3), "Capital": round(cap, 2)})
                 w += 1; l = 0; d = 0
 
         if l >= ml:
-            blk = True; bd += 1
+            blk = True; bd += 1; horario_bloqueio = ts
             trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
-                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": cap})
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": round(cap, 2)})
             w = 0; l = 0
-        if w >= mw:
-            blk = True; bv += 1
+        elif w >= mw:
+            blk = True; bv += 1; horario_bloqueio = ts
             trades.append({"Data": ts, "Direção": "-", "Entrada": 0, "Saída": 0,
-                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": cap})
+                            "Resultado": "BLOQUEIO", "P&L (%)": 0, "Capital": round(cap, 2)})
             w = 0; l = 0
 
     return trades, cap, bd, bv
@@ -305,11 +325,12 @@ def simular_rompimento_ema(df, emp, stop_pct, alvo_pct, fee, mw, ml, banca, alav
 # ========================================================================= //
 def mostrar_resultados(df, trades, cap_f, banca, bd, bv, ml, mw, tipo_est):
     if not trades:
-        st.warning("Nenhum trade gerado.")
+        st.warning("Nenhum trade gerado. Tente outro período ou timeframe.")
         return
 
     dft = pd.DataFrame(trades)
 
+    # Aviso de bloqueios
     if bd > 0 or bv > 0:
         st.markdown("---")
         c1, c2 = st.columns(2)
@@ -323,7 +344,8 @@ def mostrar_resultados(df, trades, cap_f, banca, bd, bv, ml, mw, tipo_est):
             c2.info("ℹ️ Sem bloqueio por vitórias.")
         st.markdown("---")
 
-    dn = dft[dft['Resultado'] != 'BLOQUEIO']
+    # Métricas
+    dn = dft[(dft['Resultado'] != 'BLOQUEIO') & (dft['Resultado'] != 'RETOMA')]
     t = len(dn)
     v = len(dn[dn['Resultado'] == 'Alvo'])
     r = len(dn[dn['Resultado'] == 'Stop'])
@@ -372,21 +394,21 @@ st.header("📈 Bot Cripto - Yahoo Finance")
 
 if modo == "Backtest (Passado)":
     st.subheader(f"📊 Backtest {symbol} | {timeframe} | {tipo_estrategia}")
-    st.info(f"📉 Stop: {stop_loss_pct*100:.2f}% | 📈 Alvo: {alvo_pct*100:.2f}% | 💸 Taxa: {fee*100:.2f}% | 📊 EMA: {ema_periodo} | 💰 Banca: ${banca_inicial} | ⚡ Alav: {alavancagem}x")
+    st.info(f"📉 Stop: {stop_loss_pct*100:.2f}% | 📈 Alvo: {alvo_pct*100:.2f}% | 💸 Taxa: {fee*100:.2f}% | 📊 EMA: {ema_periodo} | 💰 Banca: ${banca_inicial} | ⚡ Alav: {alavancagem}x | 🔒 Bloqueio: {horas_bloqueio}h")
 
     if st.button("🚀 Rodar Backtest", type="primary"):
-        with st.spinner("Baixando dados do Yahoo Finance..."):
+        with st.spinner("Baixando dados e simulando..."):
             df = baixar_dados_yahoo(symbol, timeframe, str(data_inicio), str(data_fim))
             if not df.empty:
                 if tipo_estrategia == "Rompimento EMA":
                     trades, cap_f, bd, bv = simular_rompimento_ema(
                         df, ema_periodo, stop_loss_pct, alvo_pct, fee,
-                        max_wins, max_losses, banca_inicial, alavancagem
+                        max_wins, max_losses, horas_bloqueio, banca_inicial, alavancagem
                     )
                 else:
                     trades, cap_f, bd, bv = simular_escada(
                         df, stop_loss_pct, alvo_pct, fee, max_wins, max_losses,
-                        tipo_estrategia, banca_inicial, alavancagem
+                        horas_bloqueio, tipo_estrategia, banca_inicial, alavancagem
                     )
                 mostrar_resultados(df, trades, cap_f, banca_inicial, bd, bv,
                                     max_losses, max_wins, tipo_estrategia)
@@ -395,4 +417,4 @@ if modo == "Live/Demo (Tempo Real)":
     st.info("⚠️ O modo Live/Demo está temporariamente indisponível. Use o Backtest.")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Bot Cripto - 4 Estratégias v2.0")
+st.sidebar.caption("Bot Cripto - 4 Estratégias v2.1")
